@@ -16,6 +16,9 @@
 logs/
 backend/logs/
 
+# docs binary
+*.docx
+
 # runtime uploads
 backend/uploads/
 
