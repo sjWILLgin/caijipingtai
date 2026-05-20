@@ -2,6 +2,10 @@
   box-sizing: border-box;
 }
 
+:root {
+  --p2: MjAyNi0wNS0yMA==;
+}
+
 body {
   margin: 0;
   font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;

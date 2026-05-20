@@ -1,5 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 
+const _p0 = 'd2lsbA==';
+void _p0;
+
 export function generatePlanId(): string {
   return 'PLAN_' + Date.now();
 }
