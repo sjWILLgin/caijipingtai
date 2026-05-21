@@ -129,12 +129,12 @@ const P02PlanForm: React.FC = () => {
                 <Select
                   placeholder="选择业务域"
                   options={[
-                    { value: '造旺', label: '造旺' },
-                    { value: '酒品', label: '酒品' },
-                    { value: '旺健康', label: '旺健康' },
-                    { value: '乳品', label: '乳品' },
-                    { value: '膨化', label: '膨化' },
-                    { value: '冰品', label: '冰品' },
+                    { value: '销售数据域', label: '销售数据域' },
+                    { value: '渠道数据域', label: '渠道数据域' },
+                    { value: '产品数据域', label: '产品数据域' },
+                    { value: '供应链数据域', label: '供应链数据域' },
+                    { value: '消费者数据域', label: '消费者数据域' },
+                    { value: '市场主数据域', label: '市场主数据域' },
                   ]}
                 />
               </Form.Item>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag } from 'antd';
-import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined } from '@ant-design/icons';
 
 const { Header, Sider, Content } = AntLayout;
 
@@ -10,14 +10,16 @@ const Layout: React.FC = () => {
   const location = useLocation();
 
   const getSelectedKey = () => {
+    if (location.pathname === '/home' || location.pathname === '/') return 'home';
     if (location.pathname.startsWith('/import-plans')) return 'plans';
     if (location.pathname.startsWith('/import-tasks')) return 'tasks';
     if (location.pathname.startsWith('/manual-tables')) return 'manual-tables';
-    return 'plans';
+    return 'home';
   };
 
   const getBreadcrumbItems = () => {
     const p = location.pathname;
+    if (p === '/home' || p === '/') return [{ title: '首页' }, { title: '操作导览' }];
     if (p === '/import-plans') return [{ title: '导入方案' }, { title: '方案列表' }];
     if (p === '/import-plans/new') return [{ title: '导入方案' }, { title: '新建方案' }];
     if (p.includes('/import-plans/') && p.includes('/edit')) return [{ title: '导入方案' }, { title: '编辑方案' }];
@@ -66,6 +68,12 @@ const Layout: React.FC = () => {
             selectedKeys={[getSelectedKey()]}
             style={{ height: '100%', borderRight: 0 }}
             items={[
+              {
+                key: 'home',
+                icon: <HomeOutlined />,
+                label: '首页',
+                onClick: () => navigate('/home'),
+              },
               {
                 key: 'plans',
                 icon: <FileTextOutlined />,

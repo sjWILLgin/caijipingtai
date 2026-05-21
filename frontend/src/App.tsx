@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import Layout from './components/Layout';
+import P00Home from './pages/P00Home';
 import P01PlanList from './pages/P01PlanList';
 import P02PlanForm from './pages/P02PlanForm';
 import P03Upload from './pages/P03Upload';
@@ -20,7 +21,8 @@ const App: React.FC = () => {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Layout />}>
-            <Route index element={<Navigate to="/import-plans" replace />} />
+            <Route index element={<Navigate to="/home" replace />} />
+            <Route path="home" element={<P00Home />} />
             <Route path="import-plans" element={<P01PlanList />} />
             <Route path="import-plans/new" element={<P02PlanForm />} />
             <Route path="import-plans/:planId/edit" element={<P02PlanForm />} />

@@ -106,3 +106,8 @@ export const tablesApi = {
   getData: (tableName: string, params?: any) => api.get(`/tables/${tableName}/data`, { params }),
   downloadTemplate: (tableName: string) => `/api/tables/${encodeURIComponent(tableName)}/template`,
 };
+
+// Dashboard API
+export const dashboardApi = {
+  getStats: () => api.get('/dashboard/stats').then((res: any) => res.data),
+};

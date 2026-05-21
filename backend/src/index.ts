@@ -12,6 +12,7 @@ import commitRouter from './routes/commit';
 import logsRouter from './routes/logs';
 import tablesRouter from './routes/tables';
 import jobsRouter from './routes/jobs';
+import dashboardRouter from './routes/dashboard';
 import { initJobQueue } from './services/jobQueue';
 
 dotenv.config();
@@ -37,6 +38,7 @@ app.use('/api/commit', commitRouter);
 app.use('/api/logs', logsRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/jobs', jobsRouter);
+app.use('/api/dashboard', dashboardRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
