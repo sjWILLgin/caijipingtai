@@ -2,8 +2,45 @@ import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { generateBatchId, successResponse, errorResponse } from '../utils';
 import { commitData } from '../services/commitService';
+import { enqueueJob } from '../services/jobQueue';
 
 const router = Router();
+const META_DB = process.env.META_DB_NAME || 'data_collection_meta';
+
+function isSafeIdentifier(name: string) {
+  return /^[a-zA-Z0-9_]+$/.test(name);
+}
+
+async function restoreFromSnapshot(targetTable: string, snapshotTable: string) {
+  if (!isSafeIdentifier(targetTable) || !isSafeIdentifier(snapshotTable) || !isSafeIdentifier(META_DB)) {
+    throw new Error('快照恢复对象名非法');
+  }
+
+  const [existsRows]: any = await pool.query(
+    `SELECT TABLE_NAME
+     FROM INFORMATION_SCHEMA.TABLES
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+    [META_DB, snapshotTable]
+  );
+  if (!existsRows.length) {
+    throw new Error('快照表不存在');
+  }
+
+  const [columnRows]: any = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+     ORDER BY ORDINAL_POSITION`,
+    [targetTable]
+  );
+  if (!columnRows.length) {
+    throw new Error('目标表不存在或无字段');
+  }
+
+  const cols = columnRows.map((r: any) => `\`${r.COLUMN_NAME}\``).join(', ');
+  await pool.query(`DELETE FROM \`${targetTable}\``);
+  await pool.query(`INSERT INTO \`${targetTable}\` (${cols}) SELECT ${cols} FROM \`${META_DB}\`.\`${snapshotTable}\``);
+}
 
 // POST /api/commit/:taskId - 提交入库
 router.post('/:taskId', async (req: Request, res: Response) => {
@@ -39,10 +76,12 @@ router.post('/:taskId', async (req: Request, res: Response) => {
 
     const batch_id = generateBatchId();
 
-    // Async commit
-    commitData(taskId, batch_id, write_mode, write_scope, operator_id, operator_name).catch(console.error);
+    const job = await enqueueJob(taskId, 'COMMIT', async () => {
+      await commitData(taskId, batch_id, write_mode, write_scope, operator_id, operator_name);
+      return { task_id: taskId, batch_id, stage: 'COMMIT' };
+    });
 
-    res.json(successResponse({ batch_id, status: 'COMMITTING' }, '入库任务已提交'));
+    res.json(successResponse({ batch_id, status: 'COMMITTING', job_id: job.job_id }, '入库任务已提交'));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
   }
@@ -60,6 +99,39 @@ router.post('/batches/:batchId/rollback', async (req: Request, res: Response) =>
     const batch = batchRows[0];
     const alreadyInvalid = !batch.is_valid;
 
+    let restoredBySnapshot = false;
+    if (batch.target_table && isSafeIdentifier(META_DB)) {
+      try {
+        await pool.query(`CREATE DATABASE IF NOT EXISTS \`${META_DB}\``);
+        const [snapRows]: any = await pool.query(
+          `SELECT * FROM \`${META_DB}\`.rollback_snapshot
+           WHERE batch_id = ? AND target_table = ?
+           ORDER BY created_at DESC LIMIT 1`,
+          [batchId, batch.target_table]
+        );
+        if (snapRows.length > 0 && snapRows[0].status === 'CREATED') {
+          await restoreFromSnapshot(batch.target_table, snapRows[0].snapshot_table);
+          await pool.query(
+            `UPDATE \`${META_DB}\`.rollback_snapshot
+             SET status = 'RESTORED', restored_at = NOW(), error_message = NULL
+             WHERE id = ?`,
+            [snapRows[0].id]
+          );
+          restoredBySnapshot = true;
+        }
+      } catch (e: any) {
+        console.warn('回滚快照恢复失败:', e.message);
+        try {
+          await pool.query(
+            `UPDATE \`${META_DB}\`.rollback_snapshot
+             SET status = 'FAILED', error_message = ?
+             WHERE batch_id = ? AND target_table = ? AND status = 'CREATED'`,
+            [e.message, batchId, batch.target_table || '']
+          );
+        } catch {}
+      }
+    }
+
     // Rollback current batch metadata
     if (!alreadyInvalid) {
       await pool.query(
@@ -69,7 +141,7 @@ router.post('/batches/:batchId/rollback', async (req: Request, res: Response) =>
     }
 
     // Write-mode-aware rollback strategy
-    if (batch.target_table) {
+    if (!restoredBySnapshot && batch.target_table) {
       try {
         if (batch.write_mode === 'FULL_OVERWRITE') {
           // User requirement: full overwrite rollback should clear table.

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag } from 'antd';
-import { DatabaseOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined } from '@ant-design/icons';
 
 const { Header, Sider, Content } = AntLayout;
 
@@ -12,6 +12,7 @@ const Layout: React.FC = () => {
   const getSelectedKey = () => {
     if (location.pathname.startsWith('/import-plans')) return 'plans';
     if (location.pathname.startsWith('/import-tasks')) return 'tasks';
+    if (location.pathname.startsWith('/manual-tables')) return 'manual-tables';
     return 'plans';
   };
 
@@ -27,6 +28,7 @@ const Layout: React.FC = () => {
     if (p.includes('/validation')) return [{ title: '任务记录' }, { title: '数据校验' }];
     if (p.includes('/commit-confirm')) return [{ title: '任务记录' }, { title: '提交确认' }];
     if (/\/import-tasks\/[^/]+$/.test(p)) return [{ title: '任务记录' }, { title: '任务详情' }];
+    if (p === '/manual-tables') return [{ title: '运维监控' }, { title: '手工数据表清单' }];
     return [{ title: '导入方案' }];
   };
 
@@ -75,6 +77,12 @@ const Layout: React.FC = () => {
                 icon: <HistoryOutlined />,
                 label: '任务记录',
                 onClick: () => navigate('/import-tasks'),
+              },
+              {
+                key: 'manual-tables',
+                icon: <TableOutlined />,
+                label: '手工数据表',
+                onClick: () => navigate('/manual-tables'),
               },
             ]}
           />

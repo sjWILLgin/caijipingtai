@@ -6,6 +6,22 @@ const NUMERIC_TYPES = new Set(['tinyint', 'smallint', 'mediumint', 'int', 'integ
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp']);
 
 const isEmptyValue = (v: any) => v === null || v === undefined || String(v).trim() === '';
+const IMPORT_CHUNK_SIZE = Math.max(100, Number(process.env.IMPORT_CHUNK_SIZE || 1000));
+const MAX_VALIDATE_ROWS = Number(process.env.IMPORT_MAX_ROWS || 200000);
+
+function getSheetRange(ws: XLSX.WorkSheet) {
+  if (!ws['!ref']) return null;
+  return XLSX.utils.decode_range(ws['!ref']);
+}
+
+function getHeaderRow(ws: XLSX.WorkSheet, rowIdx: number, range: XLSX.Range) {
+  const values: string[] = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: rowIdx, c })] as XLSX.CellObject | undefined;
+    values.push(cell?.v === undefined || cell?.v === null ? '' : String(cell.v));
+  }
+  return values;
+}
 
 function isValidByType(value: any, dataType?: string): boolean {
   if (isEmptyValue(value)) return true;
@@ -68,6 +84,7 @@ export async function runValidation(task_id: string): Promise<void> {
     let totalCount = 0;
     let successCount = 0;
     const errors: any[] = [];
+    let processedRows = 0;
 
     for (const sheet of sheets) {
       const ws = workbook.Sheets[sheet.sheet_name];
@@ -80,12 +97,13 @@ export async function runValidation(task_id: string): Promise<void> {
         continue;
       }
 
-      const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      const range = getSheetRange(ws);
+      if (!range) continue;
       const headerRow = (sheet.header_row || 1) - 1;
       const dataStartRow = (sheet.data_start_row || 2) - 1;
 
-      const headers: string[] = sheet.has_header && data[headerRow]
-        ? data[headerRow].map((h: any) => String(h))
+      const headers: string[] = sheet.has_header
+        ? getHeaderRow(ws, headerRow, range)
         : [];
 
       // Get field mappings
@@ -118,12 +136,26 @@ export async function runValidation(task_id: string): Promise<void> {
       }
 
       // Validate data rows
-      const dataRows = data.slice(dataStartRow);
-      totalCount += dataRows.length;
+      const firstDataRow = Math.max(dataStartRow, range.s.r);
+      if (firstDataRow > range.e.r) continue;
+      const sheetDataRows = range.e.r - firstDataRow + 1;
+      totalCount += sheetDataRows;
+      processedRows += sheetDataRows;
+      if (processedRows > MAX_VALIDATE_ROWS) {
+        throw new Error(`ROW_LIMIT_EXCEEDED: 校验行数超过限制 ${MAX_VALIDATE_ROWS}，请分批导入`);
+      }
 
-      for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
-        const row = dataRows[rowIdx];
-        const actualRowNo = dataStartRow + rowIdx + 1;
+      for (let startRow = firstDataRow; startRow <= range.e.r; startRow += IMPORT_CHUNK_SIZE) {
+        const endRow = Math.min(range.e.r, startRow + IMPORT_CHUNK_SIZE - 1);
+        const chunkRows: any[][] = XLSX.utils.sheet_to_json(ws, {
+          header: 1,
+          defval: '',
+          range: { s: { r: startRow, c: range.s.c }, e: { r: endRow, c: range.e.c } },
+        }) as any[][];
+
+        for (let rowIdx = 0; rowIdx < chunkRows.length; rowIdx++) {
+          const row = chunkRows[rowIdx] || [];
+          const actualRowNo = startRow + rowIdx + 1;
         let rowValid = true;
 
         // Check required mapped fields
@@ -158,7 +190,8 @@ export async function runValidation(task_id: string): Promise<void> {
           }
         }
 
-        if (rowValid) successCount++;
+          if (rowValid) successCount++;
+        }
       }
     }
 

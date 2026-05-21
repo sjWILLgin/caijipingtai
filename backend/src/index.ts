@@ -11,6 +11,8 @@ import validationRouter from './routes/validation';
 import commitRouter from './routes/commit';
 import logsRouter from './routes/logs';
 import tablesRouter from './routes/tables';
+import jobsRouter from './routes/jobs';
+import { initJobQueue } from './services/jobQueue';
 
 dotenv.config();
 
@@ -34,6 +36,7 @@ app.use('/api/validation', validationRouter);
 app.use('/api/commit', commitRouter);
 app.use('/api/logs', logsRouter);
 app.use('/api/tables', tablesRouter);
+app.use('/api/jobs', jobsRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -46,6 +49,12 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ success: false, message: err.message || '系统异常，请稍后重试' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 数据采集平台后端运行在 http://localhost:${PORT}`);
-});
+initJobQueue()
+  .catch((e) => {
+    console.error('初始化任务队列失败:', e.message);
+  })
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`🚀 数据采集平台后端运行在 http://localhost:${PORT}`);
+    });
+  });

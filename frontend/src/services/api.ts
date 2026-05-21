@@ -88,6 +88,20 @@ export const logsApi = {
 // Tables API
 export const tablesApi = {
   list: () => api.get('/tables'),
+  getManualOverview: () => api.get('/tables/manual/overview'),
+  getActivities: (tableName: string, params?: any) => api.get(`/tables/${encodeURIComponent(tableName)}/activities`, { params }),
+  exportActivitiesUrl: (tableName: string, params?: Record<string, any>) => {
+    const usp = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v === undefined || v === null || v === '') return;
+      usp.append(k, String(v));
+    });
+    const qs = usp.toString();
+    return `/api/tables/${encodeURIComponent(tableName)}/activities/export${qs ? `?${qs}` : ''}`;
+  },
+  updateLifecycle: (tableName: string, data: { lifecycle_enabled: number; lifecycle_days: number; cleanup_strategy: 'DELETE_ROWS' | 'DROP_TABLE' }) =>
+    api.put(`/tables/${encodeURIComponent(tableName)}/lifecycle`, data),
+  removeTable: (tableName: string) => api.delete(`/tables/${encodeURIComponent(tableName)}`),
   getColumns: (tableName: string) => api.get(`/tables/${tableName}/columns`),
   getData: (tableName: string, params?: any) => api.get(`/tables/${tableName}/data`, { params }),
   downloadTemplate: (tableName: string) => `/api/tables/${encodeURIComponent(tableName)}/template`,

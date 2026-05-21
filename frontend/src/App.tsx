@@ -12,6 +12,7 @@ import P06Validation from './pages/P06Validation';
 import P07CommitConfirm from './pages/P07CommitConfirm';
 import P08TaskDetail from './pages/P08TaskDetail';
 import P09TaskList from './pages/P09TaskList';
+import P10ManualTables from './pages/P10ManualTables';
 
 const App: React.FC = () => {
   return (
@@ -24,6 +25,7 @@ const App: React.FC = () => {
             <Route path="import-plans/new" element={<P02PlanForm />} />
             <Route path="import-plans/:planId/edit" element={<P02PlanForm />} />
             <Route path="import-tasks" element={<P09TaskList />} />
+            <Route path="manual-tables" element={<P10ManualTables />} />
             <Route path="import-tasks/:taskId/upload" element={<P03Upload />} />
             <Route path="import-tasks/:taskId/sheets" element={<P04Sheets />} />
             <Route path="import-tasks/:taskId/mapping" element={<P05Mapping />} />

@@ -6,8 +6,19 @@ import crypto from 'crypto';
 import pool from '../db';
 import { generateFileId, successResponse, errorResponse } from '../utils';
 import { parseFile } from '../services/parseService';
+import { enqueueJob } from '../services/jobQueue';
 
 const router = Router();
+
+function hashFileByStream(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sha = crypto.createHash('sha256');
+    const rs = fs.createReadStream(filePath);
+    rs.on('data', (chunk) => sha.update(chunk));
+    rs.on('end', () => resolve(sha.digest('hex')));
+    rs.on('error', reject);
+  });
+}
 
 // Configure multer
 const uploadDir = path.join(__dirname, '../../uploads');
@@ -51,8 +62,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     if (!taskRows.length) return res.status(404).json(errorResponse('任务不存在'));
 
     const filePath = req.file.path;
-    const fileBuffer = fs.readFileSync(filePath);
-    const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+    const fileHash = await hashFileByStream(filePath);
     const ext = path.extname(req.file.originalname).toLowerCase().replace('.', '');
 
     const file_id = generateFileId();
@@ -76,15 +86,19 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       [task_id, `文件已上传：${req.file.originalname}（${(req.file.size / 1024).toFixed(1)} KB）`]
     );
 
-    // Trigger async parse
-    parseFile(task_id, file_id, filePath, ext, csv_encoding, csv_delimiter).catch(console.error);
+    // Trigger parse in background queue
+    const job = await enqueueJob(task_id, 'PARSE', async () => {
+      await parseFile(task_id, file_id, filePath, ext, csv_encoding, csv_delimiter);
+      return { task_id, file_id, stage: 'PARSE' };
+    });
 
     res.json(successResponse({
       file_id,
       file_name: req.file.originalname,
       file_size: req.file.size,
       file_type: ext,
-      task_id
+      task_id,
+      job_id: job.job_id
     }, '文件上传成功，正在解析中'));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));

@@ -1,7 +1,19 @@
 import * as XLSX from 'xlsx';
 import fs from 'fs';
-import path from 'path';
 import pool from '../db';
+
+const MAX_PARSE_ROWS = Number(process.env.IMPORT_MAX_ROWS || 200000);
+
+function getSheetRange(ws: XLSX.WorkSheet) {
+  if (!ws['!ref']) return null;
+  return XLSX.utils.decode_range(ws['!ref']);
+}
+
+function getCellText(ws: XLSX.WorkSheet, row: number, col: number) {
+  const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })] as XLSX.CellObject | undefined;
+  if (!cell || cell.v === undefined || cell.v === null) return '';
+  return String(cell.v);
+}
 
 export async function parseFile(
   task_id: string,
@@ -43,24 +55,42 @@ export async function parseFile(
     await pool.query('DELETE FROM field_mapping WHERE task_id = ?', [task_id]);
 
     let sheetIndex = 0;
+    let totalRowsAcrossSheets = 0;
     for (const sheetName of workbook.SheetNames) {
       const ws = workbook.Sheets[sheetName];
-      const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      const range = getSheetRange(ws);
+      const rowCount = range ? (range.e.r - range.s.r + 1) : 0;
+      const dataRows = Math.max(0, rowCount - 1);
+      totalRowsAcrossSheets += dataRows;
+      if (totalRowsAcrossSheets > MAX_PARSE_ROWS) {
+        throw new Error(`ROW_LIMIT_EXCEEDED: 解析行数超过限制 ${MAX_PARSE_ROWS}，请分批导入`);
+      }
 
-      const rowCount = data.length;
-      const headers: string[] = rowCount > 0 ? data[0].map((h: any) => String(h || '')) : [];
+      const headers: string[] = [];
+      if (range) {
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          headers.push(getCellText(ws, range.s.r, c));
+        }
+      }
 
       // Insert sheet mapping
       await pool.query(
         `INSERT INTO sheet_mapping (task_id, sheet_name, sheet_index, is_imported, has_header, header_row, data_start_row, row_count)
          VALUES (?, ?, ?, 1, 1, 1, 2, ?)`,
-        [task_id, sheetName, sheetIndex, Math.max(0, rowCount - 1)]
+        [task_id, sheetName, sheetIndex, dataRows]
       );
 
       // Insert field mappings
       for (let i = 0; i < headers.length; i++) {
         const header = headers[i] || `Column${i + 1}`;
-        const sampleValues = data.slice(1, 4).map(row => String(row[i] || '')).join(', ');
+        const samples: string[] = [];
+        if (range) {
+          const colIdx = range.s.c + i;
+          for (let r = range.s.r + 1; r <= Math.min(range.s.r + 3, range.e.r); r++) {
+            samples.push(getCellText(ws, r, colIdx));
+          }
+        }
+        const sampleValues = samples.join(', ');
 
         await pool.query(
           `INSERT INTO field_mapping (task_id, sheet_name, source_field, source_index, mapping_type, order_no, sample_value)

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { successResponse, errorResponse } from '../utils';
 import { runValidation } from '../services/validationService';
+import { enqueueJob } from '../services/jobQueue';
 
 const router = Router();
 
@@ -18,10 +19,12 @@ router.post('/:taskId/run', async (req: Request, res: Response) => {
       [taskId]
     );
 
-    // Run validation async
-    runValidation(taskId).catch(console.error);
+    const job = await enqueueJob(taskId, 'VALIDATE', async () => {
+      await runValidation(taskId);
+      return { task_id: taskId, stage: 'VALIDATE' };
+    });
 
-    res.json(successResponse({ task_id: taskId, status: 'VALIDATING' }, '校验已启动'));
+    res.json(successResponse({ task_id: taskId, status: 'VALIDATING', job_id: job.job_id }, '校验已启动'));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
   }
