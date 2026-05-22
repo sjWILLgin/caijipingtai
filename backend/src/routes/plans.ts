@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { generatePlanId, generateRuleId, successResponse, errorResponse } from '../utils';
+import { getApprovalRuleByTable } from '../services/approvalFlowService';
 
 const router = Router();
 
@@ -15,6 +16,37 @@ const parseJsonField = (value: any, fallback: any) => {
   }
   return value;
 };
+
+async function resolvePlanApprovalRequirement(targetTable: string, domain: string) {
+  const tableName = String(targetTable || '').trim();
+  if (!tableName || !/^[a-zA-Z0-9_]+$/.test(tableName)) {
+    return { requireApproval: 0, matchedTemplateId: null, templates: [] as any[] };
+  }
+  const rule = await getApprovalRuleByTable({
+    targetTable: tableName,
+    domain: String(domain || '').trim() || null,
+    withNodes: true,
+  });
+  return {
+    requireApproval: Number(rule.approval_required || 0),
+    matchedTemplateId: rule.matched_template_id ? Number(rule.matched_template_id) : null,
+    templates: rule.templates || [],
+  };
+}
+
+router.get('/approval-rule', async (req: Request, res: Response) => {
+  try {
+    const tableName = String(req.query.target_table || '').trim();
+    const domain = String(req.query.domain || '').trim();
+    if (!tableName) {
+      return res.status(400).json(errorResponse('target_table 不能为空'));
+    }
+    const rule = await resolvePlanApprovalRequirement(tableName, domain);
+    return res.json(successResponse(rule));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '获取审批规则失败'));
+  }
+});
 
 // GET /api/import-plans - 查询导入方案列表
 router.get('/', async (req: Request, res: Response) => {
@@ -52,6 +84,9 @@ router.post('/', async (req: Request, res: Response) => {
     const { plan_name, domain, data_subject, file_types, sheet_strategy, write_modes, mapping_strategy, target_table, require_approval, description, owner_id, status } = req.body;
     if (!plan_name) return res.status(400).json(errorResponse('方案名称不能为空'));
 
+    const approvalRule = await resolvePlanApprovalRequirement(String(target_table || ''), String(domain || ''));
+    const finalRequireApproval = approvalRule.requireApproval;
+
     const plan_id = generatePlanId();
     await pool.query(
       `INSERT INTO import_plan (plan_id, plan_name, domain, data_subject, file_types, sheet_strategy, write_modes, mapping_strategy, target_table, require_approval, description, owner_id, status, version)
@@ -61,11 +96,18 @@ router.post('/', async (req: Request, res: Response) => {
         sheet_strategy || 'SINGLE_SHEET_SINGLE_TABLE',
         JSON.stringify(write_modes || ['APPEND']),
         JSON.stringify(mapping_strategy || { auto_match: true }),
-        target_table, require_approval ? 1 : 0, description, owner_id || 'admin', status || 'ACTIVE']
+        target_table, finalRequireApproval, description, owner_id || 'admin', status || 'ACTIVE']
     );
 
     const [rows]: any = await pool.query('SELECT * FROM import_plan WHERE plan_id = ? AND version = 1', [plan_id]);
-    res.json(successResponse({ plan_id, version: 1, plan: rows[0] }, '方案创建成功'));
+    res.json(successResponse({
+      plan_id,
+      version: 1,
+      plan: rows[0],
+      approval_required_locked: approvalRule.requireApproval === 1,
+      matched_template_id: approvalRule.matchedTemplateId,
+      matched_templates: approvalRule.templates,
+    }, '方案创建成功'));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
   }
@@ -86,6 +128,11 @@ router.get('/:planId', async (req: Request, res: Response) => {
     plan.file_types = parseJsonField(plan.file_types, []);
     plan.write_modes = parseJsonField(plan.write_modes, []);
     plan.mapping_strategy = parseJsonField(plan.mapping_strategy, {});
+    const approvalRule = await resolvePlanApprovalRequirement(String(plan.target_table || ''), String(plan.domain || ''));
+    plan.require_approval = approvalRule.requireApproval;
+    plan.approval_required_locked = true;
+    plan.matched_template_id = approvalRule.matchedTemplateId;
+    plan.matched_templates = approvalRule.templates;
 
     // Get validate rules
     const [rules]: any = await pool.query('SELECT * FROM validate_rule WHERE plan_id = ? AND status = 1', [planId]);
@@ -109,24 +156,33 @@ router.put('/:planId', async (req: Request, res: Response) => {
 
     const current = existing[0];
     const newVersion = current.version + 1;
-    const { plan_name, domain, data_subject, file_types, sheet_strategy, write_modes, mapping_strategy, target_table, require_approval, description, status } = req.body;
+    const { plan_name, domain, data_subject, file_types, sheet_strategy, write_modes, mapping_strategy, target_table, description, status } = req.body;
+    const finalDomain = domain || current.domain;
+    const finalTargetTable = target_table || current.target_table;
+    const approvalRule = await resolvePlanApprovalRequirement(String(finalTargetTable || ''), String(finalDomain || ''));
 
     await pool.query(
       `INSERT INTO import_plan (plan_id, plan_name, domain, data_subject, file_types, sheet_strategy, write_modes, mapping_strategy, target_table, require_approval, description, owner_id, status, version)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [planId, plan_name || current.plan_name, domain || current.domain,
+      [planId, plan_name || current.plan_name, finalDomain,
         data_subject || current.data_subject,
         JSON.stringify(file_types || parseJsonField(current.file_types, [])),
         sheet_strategy || current.sheet_strategy,
         JSON.stringify(write_modes || parseJsonField(current.write_modes, [])),
         JSON.stringify(mapping_strategy || parseJsonField(current.mapping_strategy, {})),
-        target_table || current.target_table,
-        require_approval !== undefined ? (require_approval ? 1 : 0) : current.require_approval,
+        finalTargetTable,
+        approvalRule.requireApproval,
         description || current.description,
         current.owner_id, status || current.status || 'ACTIVE', newVersion]
     );
 
-    res.json(successResponse({ plan_id: planId, version: newVersion }, '方案更新成功，已生成新版本'));
+    res.json(successResponse({
+      plan_id: planId,
+      version: newVersion,
+      approval_required_locked: true,
+      matched_template_id: approvalRule.matchedTemplateId,
+      matched_templates: approvalRule.templates,
+    }, '方案更新成功，已生成新版本'));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
   }

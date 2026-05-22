@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { approvalApi } from '../services/api';
+import { approvalApi, tablesApi } from '../services/api';
 
 type Actor = {
   actor_type: 'USER' | 'ROLE' | 'DOMAIN_ADMIN';
@@ -19,11 +19,19 @@ type NodeConfig = {
   actors: Actor[];
 };
 
+type ApproverUser = {
+  id: number;
+  username: string;
+  display_name: string;
+  role_key: string;
+};
+
 type TemplateRow = {
   id: number;
   flow_code: string;
   flow_name: string;
   domain?: string | null;
+  target_tables?: string[];
   enabled: number;
   version: number;
   nodes?: NodeConfig[];
@@ -48,6 +56,8 @@ const P14ApprovalFlowTemplates: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<TemplateRow | null>(null);
+  const [approverUsers, setApproverUsers] = useState<ApproverUser[]>([]);
+  const [targetTableOptions, setTargetTableOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [form] = Form.useForm();
 
   const load = async () => {
@@ -64,6 +74,13 @@ const P14ApprovalFlowTemplates: React.FC = () => {
 
   useEffect(() => {
     load();
+    approvalApi.actorUsers().then((rows: ApproverUser[]) => {
+      setApproverUsers(Array.isArray(rows) ? rows : []);
+    }).catch(() => undefined);
+    tablesApi.list().then((res: any) => {
+      const items = (res.data || []).map((t: any) => ({ label: t.TABLE_NAME, value: t.TABLE_NAME }));
+      setTargetTableOptions(items);
+    }).catch(() => undefined);
   }, []);
 
   const openCreate = () => {
@@ -72,6 +89,7 @@ const P14ApprovalFlowTemplates: React.FC = () => {
       flow_code: '',
       flow_name: '',
       domain: '',
+      target_tables: [],
       nodes: [emptyNode(1)],
     });
     setModalOpen(true);
@@ -83,6 +101,7 @@ const P14ApprovalFlowTemplates: React.FC = () => {
       flow_code: row.flow_code,
       flow_name: row.flow_name,
       domain: row.domain || '',
+      target_tables: row.target_tables || [],
       nodes: (row.nodes || []).map((n, i) => ({
         ...n,
         node_order: i + 1,
@@ -113,6 +132,7 @@ const P14ApprovalFlowTemplates: React.FC = () => {
         flow_code: String(values.flow_code || '').trim().toUpperCase(),
         flow_name: String(values.flow_name || '').trim(),
         domain: String(values.domain || '').trim() || null,
+        target_tables: Array.isArray(values.target_tables) ? values.target_tables : [],
         nodes,
       };
 
@@ -165,6 +185,12 @@ const P14ApprovalFlowTemplates: React.FC = () => {
           { title: '模板编码', dataIndex: 'flow_code', width: 190 },
           { title: '模板名称', dataIndex: 'flow_name', width: 200 },
           { title: '业务域', dataIndex: 'domain', width: 120, render: (v: string) => v || '通用' },
+          {
+            title: '绑定表数量',
+            key: 'table_count',
+            width: 110,
+            render: (_, r) => Array.isArray(r.target_tables) ? r.target_tables.length : 0,
+          },
           { title: '节点数', key: 'node_count', width: 90, render: (_, r) => (r.nodes || []).length },
           { title: '版本', dataIndex: 'version', width: 80 },
           {
@@ -208,8 +234,23 @@ const P14ApprovalFlowTemplates: React.FC = () => {
       >
         <Form form={form} layout="vertical">
           <Space style={{ width: '100%' }} align="start">
-            <Form.Item name="flow_code" label="模板编码" rules={[{ required: true, message: '请输入模板编码' }]} style={{ width: 260 }}>
-              <Input placeholder="如：COMMIT_MULTI_STAGE" disabled={!!editing} />
+            <Form.Item
+              name="flow_code"
+              label="模板编码"
+              rules={[
+                { required: true, message: '请输入模板编码' },
+                { pattern: /^[A-Z0-9_]{4,64}$/, message: '仅允许4-64位大写字母、数字、下划线' },
+              ]}
+              style={{ width: 260 }}
+            >
+              <Input
+                placeholder="如：COMMIT_MULTI_STAGE"
+                disabled={!!editing}
+                onChange={(e) => {
+                  const next = String(e.target.value || '').toUpperCase().replace(/[^A-Z0-9_]/g, '').slice(0, 64);
+                  form.setFieldValue('flow_code', next);
+                }}
+              />
             </Form.Item>
             <Form.Item name="flow_name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }]} style={{ width: 320 }}>
               <Input placeholder="如：提交审批-会签版" />
@@ -218,6 +259,21 @@ const P14ApprovalFlowTemplates: React.FC = () => {
               <Input placeholder="留空表示通用" />
             </Form.Item>
           </Space>
+
+          <Form.Item
+            name="target_tables"
+            label="绑定目标表"
+            rules={[{ required: true, type: 'array', min: 1, message: '请至少选择一个目标表' }]}
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              placeholder="请选择要命中该审批流的目标表"
+              options={targetTableOptions}
+              filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
+            />
+          </Form.Item>
 
           <Form.List name="nodes">
             {(nodeFields, { add, remove }) => (
@@ -288,9 +344,32 @@ const P14ApprovalFlowTemplates: React.FC = () => {
                                   if (actorType === 'DOMAIN_ADMIN') {
                                     return <Tag color="blue">自动按业务域解析审批人</Tag>;
                                   }
+                                  if (actorType === 'ROLE') {
+                                    return (
+                                      <Form.Item name={[af.name, 'actor_value']} rules={[{ required: true, message: '请选择角色' }]}>
+                                        <Select
+                                          style={{ width: 220 }}
+                                          options={[
+                                            { value: 'super_admin', label: '超级管理员' },
+                                            { value: 'domain_admin', label: '域管理员' },
+                                            { value: 'analyst', label: '分析师' },
+                                          ]}
+                                        />
+                                      </Form.Item>
+                                    );
+                                  }
                                   return (
-                                    <Form.Item name={[af.name, 'actor_value']} rules={[{ required: true, message: '请输入值' }]}>
-                                      <Input style={{ width: 220 }} placeholder={actorType === 'USER' ? '用户ID，如 2' : '角色键，如 super_admin'} />
+                                    <Form.Item name={[af.name, 'actor_value']} rules={[{ required: true, message: '请选择审批人' }]}>
+                                      <Select
+                                        showSearch
+                                        style={{ width: 280 }}
+                                        optionFilterProp="label"
+                                        options={approverUsers.map((u) => ({
+                                          value: String(u.id),
+                                          label: `${u.display_name || u.username} (${u.username})`,
+                                        }))}
+                                        placeholder="请选择注册用户"
+                                      />
                                     </Form.Item>
                                   );
                                 }}

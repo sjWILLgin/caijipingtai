@@ -34,6 +34,7 @@ type FlowTemplateInput = {
   flow_code: string;
   flow_name: string;
   domain?: string | null;
+  target_tables?: string[];
   enabled?: number;
   nodes: Array<{
     node_order: number;
@@ -55,6 +56,7 @@ type FlowTemplate = {
   flow_code: string;
   flow_name: string;
   domain: string | null;
+  target_tables: string[];
   enabled: number;
   version: number;
   nodes: FlowTemplateNode[];
@@ -84,9 +86,42 @@ function parseJsonArray(value: any): number[] {
   return [];
 }
 
+function parseStringArray(value: any): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v || '').trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    try {
+      const arr = JSON.parse(value);
+      if (Array.isArray(arr)) {
+        return arr.map((v) => String(v || '').trim()).filter(Boolean);
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function normalizeTargetTables(input: any): string[] {
+  const list = parseStringArray(input).map((v) => v.toLowerCase());
+  const uniq = Array.from(new Set(list));
+  if (!uniq.length) {
+    throw new Error('审批流模板至少需要绑定一个目标数据表');
+  }
+  for (const tableName of uniq) {
+    if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
+      throw new Error(`目标表名格式不合法: ${tableName}`);
+    }
+  }
+  return uniq;
+}
+
 async function getTemplateById(templateId: number): Promise<FlowTemplate | null> {
   const [rows]: any = await pool.query(
-    `SELECT id, flow_code, flow_name, domain, enabled, version
+    `SELECT id, flow_code, flow_name, domain, target_tables_json, enabled, version
      FROM approval_flow_template
      WHERE id = ?
      LIMIT 1`,
@@ -133,6 +168,7 @@ async function getTemplateById(templateId: number): Promise<FlowTemplate | null>
     flow_code: rows[0].flow_code,
     flow_name: rows[0].flow_name,
     domain: rows[0].domain || null,
+    target_tables: parseStringArray(rows[0].target_tables_json),
     enabled: Number(rows[0].enabled || 0),
     version: Number(rows[0].version || 1),
     nodes: nodeRows.map((n: any) => ({
@@ -153,10 +189,11 @@ function normalizeTemplateInput(input: FlowTemplateInput): FlowTemplateInput {
   const flow_code = String(input.flow_code || '').trim();
   const flow_name = String(input.flow_name || '').trim();
   const domain = input.domain ? String(input.domain).trim() : null;
+  const target_tables = normalizeTargetTables(input.target_tables);
   const nodes = Array.isArray(input.nodes) ? input.nodes : [];
 
   if (!flow_code || !/^[A-Z0-9_]{4,64}$/.test(flow_code)) {
-    throw new Error('flow_code 必须为4-64位大写字母数字下划线');
+    throw new Error('模板编码格式错误：仅允许4-64位大写字母、数字、下划线');
   }
   if (!flow_name) {
     throw new Error('flow_name 不能为空');
@@ -220,6 +257,7 @@ function normalizeTemplateInput(input: FlowTemplateInput): FlowTemplateInput {
     flow_code,
     flow_name,
     domain,
+    target_tables,
     nodes: normalizedNodes,
   };
 }
@@ -244,9 +282,9 @@ export async function createApprovalTemplate(authUser: AuthUser, input: FlowTemp
     }
 
     const [ret]: any = await conn.query(
-      `INSERT INTO approval_flow_template (flow_code, flow_name, domain, enabled, version)
-       VALUES (?, ?, ?, ?, 1)`,
-      [normalized.flow_code, normalized.flow_name, normalized.domain || null, Number(normalized.enabled ?? 1) ? 1 : 0]
+      `INSERT INTO approval_flow_template (flow_code, flow_name, domain, target_tables_json, enabled, version)
+       VALUES (?, ?, ?, ?, ?, 1)`,
+      [normalized.flow_code, normalized.flow_name, normalized.domain || null, JSON.stringify(normalized.target_tables || []), Number(normalized.enabled ?? 1) ? 1 : 0]
     );
     const templateId = Number(ret.insertId);
 
@@ -308,9 +346,9 @@ export async function updateApprovalTemplate(authUser: AuthUser, templateId: num
 
     await conn.query(
       `UPDATE approval_flow_template
-       SET flow_code = ?, flow_name = ?, domain = ?, version = version + 1, updated_at = NOW()
+       SET flow_code = ?, flow_name = ?, domain = ?, target_tables_json = ?, version = version + 1, updated_at = NOW()
        WHERE id = ?`,
-      [normalized.flow_code, normalized.flow_name, normalized.domain || null, templateId]
+      [normalized.flow_code, normalized.flow_name, normalized.domain || null, JSON.stringify(normalized.target_tables || []), templateId]
     );
 
     await conn.query('DELETE FROM approval_flow_node_actor WHERE node_id IN (SELECT id FROM approval_flow_node WHERE template_id = ?)', [templateId]);
@@ -408,7 +446,7 @@ export async function listApprovalTemplates(authUser: AuthUser) {
   let rows: any[] = [];
   if (authUser.roleKey === 'super_admin') {
     const [r]: any = await pool.query(
-      `SELECT id, flow_code, flow_name, domain, enabled, version, created_at, updated_at
+      `SELECT id, flow_code, flow_name, domain, target_tables_json, enabled, version, created_at, updated_at
        FROM approval_flow_template
        ORDER BY id ASC`
     );
@@ -419,7 +457,7 @@ export async function listApprovalTemplates(authUser: AuthUser) {
     if (!domains.length) return [];
     const placeholders = domains.map(() => '?').join(', ');
     const [r]: any = await pool.query(
-      `SELECT id, flow_code, flow_name, domain, enabled, version, created_at, updated_at
+      `SELECT id, flow_code, flow_name, domain, target_tables_json, enabled, version, created_at, updated_at
        FROM approval_flow_template
        WHERE enabled = 1
          AND (domain IS NULL OR domain = '' OR domain IN (${placeholders}))
@@ -434,6 +472,7 @@ export async function listApprovalTemplates(authUser: AuthUser) {
     flow_code: r.flow_code,
     flow_name: r.flow_name,
     domain: r.domain || null,
+    target_tables: parseStringArray(r.target_tables_json),
     enabled: Number(r.enabled || 0),
     version: Number(r.version || 1),
     created_at: r.created_at,
@@ -449,6 +488,81 @@ export async function listApprovalTemplatesWithNodes(authUser: AuthUser) {
     if (detail) results.push(detail);
   }
   return results;
+}
+
+export async function matchApprovalTemplatesByTable(params: {
+  targetTable: string;
+  domain?: string | null;
+  withNodes?: boolean;
+  enabledOnly?: boolean;
+}) {
+  const targetTable = String(params.targetTable || '').trim().toLowerCase();
+  const domain = String(params.domain || '').trim();
+  if (!targetTable || !/^[a-zA-Z0-9_]+$/.test(targetTable)) {
+    return [];
+  }
+
+  const sql = params.enabledOnly
+    ? `SELECT id, flow_code, flow_name, domain, target_tables_json, enabled, version, created_at, updated_at
+       FROM approval_flow_template
+       WHERE enabled = 1
+       ORDER BY id ASC`
+    : `SELECT id, flow_code, flow_name, domain, target_tables_json, enabled, version, created_at, updated_at
+       FROM approval_flow_template
+       ORDER BY id ASC`;
+
+  const [rows]: any = await pool.query(sql);
+  const matched = (rows || [])
+    .map((r: any) => ({
+      id: Number(r.id),
+      flow_code: String(r.flow_code || ''),
+      flow_name: String(r.flow_name || ''),
+      domain: r.domain ? String(r.domain) : null,
+      target_tables: parseStringArray(r.target_tables_json).map((t) => t.toLowerCase()),
+      enabled: Number(r.enabled || 0),
+      version: Number(r.version || 1),
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }))
+    .filter((t: any) => {
+      const hitTable = t.target_tables.includes(targetTable);
+      if (!hitTable) return false;
+      if (!t.domain) return true;
+      return !!domain && t.domain === domain;
+    })
+    .sort((a: any, b: any) => {
+      const aExact = a.domain && a.domain === domain ? 1 : 0;
+      const bExact = b.domain && b.domain === domain ? 1 : 0;
+      if (aExact !== bExact) return bExact - aExact;
+      return a.id - b.id;
+    });
+
+  if (!params.withNodes) return matched;
+
+  const result = [] as any[];
+  for (const row of matched) {
+    const detail = await getTemplateById(Number(row.id));
+    if (detail) result.push(detail);
+  }
+  return result;
+}
+
+export async function getApprovalRuleByTable(params: {
+  targetTable: string;
+  domain?: string | null;
+  withNodes?: boolean;
+}) {
+  const templates = await matchApprovalTemplatesByTable({
+    targetTable: params.targetTable,
+    domain: params.domain,
+    withNodes: params.withNodes,
+    enabledOnly: true,
+  });
+  return {
+    approval_required: templates.length > 0 ? 1 : 0,
+    templates,
+    matched_template_id: templates.length ? Number(templates[0].id) : null,
+  };
 }
 
 export async function getLatestCommitApprovalState(taskId: string) {

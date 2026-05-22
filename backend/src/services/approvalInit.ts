@@ -134,6 +134,7 @@ export async function initApprovalTables() {
       flow_code VARCHAR(64) NOT NULL UNIQUE,
       flow_name VARCHAR(128) NOT NULL,
       domain VARCHAR(64) NULL,
+      target_tables_json JSON NULL,
       enabled TINYINT NOT NULL DEFAULT 1,
       version INT NOT NULL DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -142,6 +143,8 @@ export async function initApprovalTables() {
       KEY idx_enabled (enabled)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
   );
+
+  await ensureColumn('approval_flow_template', 'target_tables_json', 'target_tables_json JSON NULL');
 
   await pool.query(
     `CREATE TABLE IF NOT EXISTS approval_flow_node (

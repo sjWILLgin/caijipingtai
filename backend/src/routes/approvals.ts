@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { errorResponse, successResponse } from '../utils';
-import { createApprovalTemplate, decideInstance, getApprovalTemplateDetail, getLatestByTask, hasApprovalInstanceById, listApprovalTemplates, listApprovalTemplatesWithNodes, listMyInstances, listPendingForUser, publishApprovalTemplate, updateApprovalTemplate } from '../services/approvalFlowService';
+import { createApprovalTemplate, decideInstance, getApprovalTemplateDetail, getApprovalRuleByTable, getLatestByTask, hasApprovalInstanceById, listApprovalTemplates, listApprovalTemplatesWithNodes, listMyInstances, listPendingForUser, publishApprovalTemplate, updateApprovalTemplate } from '../services/approvalFlowService';
 
 const router = Router();
 
@@ -151,6 +151,63 @@ router.get('/templates', async (req: Request, res: Response) => {
     return res.json(successResponse(rows));
   } catch (err: any) {
     return res.status(500).json(errorResponse(err.message || '获取审批流模板失败'));
+  }
+});
+
+router.get('/templates/match', async (req: Request, res: Response) => {
+  try {
+    const authUser = (req as any).authUser as AuthUser;
+    const tableName = String(req.query.table_name || '').trim();
+    const domain = String(req.query.domain || '').trim();
+    const detail = String(req.query.detail || '1') === '1';
+
+    if (!tableName) {
+      return res.status(400).json(errorResponse('table_name 不能为空'));
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
+      return res.status(400).json(errorResponse('table_name 格式不合法'));
+    }
+
+    if (authUser.roleKey !== 'super_admin' && authUser.roleKey !== 'domain_admin' && authUser.roleKey !== 'analyst') {
+      return res.status(403).json(errorResponse('无权限查看审批命中规则'));
+    }
+
+    const data = await getApprovalRuleByTable({
+      targetTable: tableName,
+      domain: domain || null,
+      withNodes: detail,
+    });
+    return res.json(successResponse(data));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '获取审批命中规则失败'));
+  }
+});
+
+router.get('/actors/users', async (req: Request, res: Response) => {
+  try {
+    const authUser = (req as any).authUser as AuthUser;
+    if (authUser.roleKey !== 'super_admin' && authUser.roleKey !== 'domain_admin') {
+      return res.status(403).json(errorResponse('无权限查看审批人列表'));
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT u.id, u.username, u.display_name, u.is_active, r.role_key
+       FROM sys_user u
+       LEFT JOIN sys_user_role ur ON ur.user_id = u.id
+       LEFT JOIN sys_role r ON r.id = ur.role_id
+       WHERE u.is_active = 1
+       ORDER BY u.id ASC`
+    );
+
+    const data = (rows || []).map((r: any) => ({
+      id: Number(r.id),
+      username: String(r.username || ''),
+      display_name: String(r.display_name || ''),
+      role_key: String(r.role_key || ''),
+    }));
+    return res.json(successResponse(data));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '获取审批人列表失败'));
   }
 });
 

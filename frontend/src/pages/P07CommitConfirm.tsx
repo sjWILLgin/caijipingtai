@@ -4,7 +4,7 @@ import {
   Button, Card, message, Typography, Space, Alert, Steps, Tag, Spin, Select, Descriptions, Checkbox, Modal
 } from 'antd';
 import { ArrowLeftOutlined, CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
-import { approvalApi, commitApi, tasksApi } from '../services/api';
+import { approvalApi, commitApi, plansApi, tasksApi } from '../services/api';
 
 const { Title, Text } = Typography;
 
@@ -26,6 +26,7 @@ const P07CommitConfirm: React.FC = () => {
   const [approvalHint, setApprovalHint] = useState('');
   const [approvalStatus, setApprovalStatus] = useState<any>(null);
   const [checkingApproval, setCheckingApproval] = useState(false);
+  const [approvalRule, setApprovalRule] = useState<any>({ requireApproval: 0, templates: [] });
 
   useEffect(() => {
     tasksApi.get(taskId!).then((res: any) => {
@@ -34,6 +35,15 @@ const P07CommitConfirm: React.FC = () => {
       // Set default write mode from plan
       const modes = t.write_modes || ['APPEND'];
       setWriteMode(modes[0]);
+      if (t.target_table) {
+        plansApi.approvalRule(t.target_table, t.domain).then((ruleRes: any) => {
+          const data = ruleRes.data || {};
+          setApprovalRule({
+            requireApproval: Number(data.requireApproval || 0),
+            templates: data.templates || [],
+          });
+        }).catch(() => undefined);
+      }
       setLoading(false);
     }).catch(e => { message.error(e.message); setLoading(false); });
   }, [taskId]);
@@ -171,6 +181,34 @@ const P07CommitConfirm: React.FC = () => {
           )}
         </Space>
       </Card>
+
+      {Number(approvalRule.requireApproval || 0) === 1 ? (
+        <Card title="命中审批流" style={{ marginBottom: 16 }}>
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="当前任务命中审批模板，提交后将先进入审批流"
+          />
+          <Space direction="vertical" style={{ width: '100%' }}>
+            {(approvalRule.templates || []).map((tpl: any) => (
+              <Card key={tpl.id} size="small" title={`${tpl.flow_name} (${tpl.flow_code})`}>
+                {(tpl.nodes || []).map((node: any) => (
+                  <div key={`${tpl.id}_${node.node_order}`} style={{ marginBottom: 8 }}>
+                    <Space wrap>
+                      <Tag color="blue">节点{node.node_order}</Tag>
+                      <span>{node.node_name}</span>
+                      <Tag>{node.sign_type}</Tag>
+                      <Tag>{node.pass_rule}</Tag>
+                      <Tag>{node.reject_rule || 'ANY_REJECT'}</Tag>
+                    </Space>
+                  </div>
+                ))}
+              </Card>
+            ))}
+          </Space>
+        </Card>
+      ) : null}
 
       {isRisky && (
         <Card style={{ marginBottom: 16, border: '1px solid #ff4d4f' }}>

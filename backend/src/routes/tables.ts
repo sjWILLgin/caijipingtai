@@ -515,10 +515,11 @@ router.put('/:tableName/approval-config', async (req: Request, res: Response) =>
     const authUser = (req as any).authUser;
     const tableName = String(req.params.tableName || '').trim();
     const domain = String(req.body?.domain || '').trim();
-    const approvalRequired = Number(req.body?.approval_required ? 1 : 0);
+    const approvalRequiredInput = Number(req.body?.approval_required ? 1 : 0);
     const approverRole = String(req.body?.approver_role || 'super_admin');
     const approverUserId = req.body?.approver_user_id ? Number(req.body?.approver_user_id) : null;
     const flowTemplateId = req.body?.flow_template_id ? Number(req.body.flow_template_id) : null;
+    const approvalRequired = flowTemplateId && flowTemplateId > 0 ? 1 : approvalRequiredInput;
 
     await ensureManualTable(tableName);
 
@@ -531,7 +532,7 @@ router.put('/:tableName/approval-config', async (req: Request, res: Response) =>
     }
 
     if (approvalRequired === 1 && (!flowTemplateId || flowTemplateId <= 0)) {
-      return res.status(400).json(errorResponse('启用审批流时必须选择 flow_template_id'));
+      return res.status(400).json(errorResponse('命中审批时必须选择 flow_template_id'));
     }
 
     if (flowTemplateId && flowTemplateId > 0) {

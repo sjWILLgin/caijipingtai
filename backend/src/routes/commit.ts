@@ -3,7 +3,7 @@ import pool from '../db';
 import { generateBatchId, successResponse, errorResponse } from '../utils';
 import { commitData } from '../services/commitService';
 import { enqueueJob } from '../services/jobQueue';
-import { createCommitApprovalInstance, getLatestCommitApprovalState } from '../services/approvalFlowService';
+import { createCommitApprovalInstance, getApprovalRuleByTable, getLatestCommitApprovalState } from '../services/approvalFlowService';
 
 const router = Router();
 const META_DB = process.env.META_DB_NAME || 'data_collection_meta';
@@ -93,10 +93,17 @@ router.post('/:taskId', async (req: Request, res: Response) => {
     );
 
     const tableCfg = cfgRows[0] || null;
-    const approvalRequired = Number(plan.require_approval || 0) === 1 || Number(tableCfg?.approval_required || 0) === 1;
+    const ruleByTable = await getApprovalRuleByTable({
+      targetTable: targetTable,
+      domain: String(tableCfg?.domain || plan.domain || '') || null,
+      withNodes: false,
+    });
+
+    const matchedTemplateId = ruleByTable.matched_template_id ? Number(ruleByTable.matched_template_id) : 0;
+    const approvalRequired = matchedTemplateId > 0 || Number(tableCfg?.approval_required || 0) === 1;
 
     if (approvalRequired) {
-      const flowTemplateId = tableCfg?.flow_template_id ? Number(tableCfg.flow_template_id) : 0;
+      const flowTemplateId = tableCfg?.flow_template_id ? Number(tableCfg.flow_template_id) : matchedTemplateId;
 
       if (flowTemplateId > 0) {
         const latestFlowReq = await getLatestCommitApprovalState(taskId);

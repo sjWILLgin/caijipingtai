@@ -59,6 +59,7 @@ export const authApi = {
 // Import Plans API
 export const plansApi = {
   list: (params?: any) => api.get('/import-plans', { params }),
+  approvalRule: (targetTable: string, domain?: string) => api.get('/import-plans/approval-rule', { params: { target_table: targetTable, domain } }),
   create: (data: any) => api.post('/import-plans', data),
   get: (planId: string) => api.get(`/import-plans/${planId}`),
   update: (planId: string, data: any) => api.put(`/import-plans/${planId}`, data),
@@ -157,6 +158,9 @@ export const tablesApi = {
 export const approvalApi = {
   my: () => api.get('/approvals/my').then((res: any) => res.data),
   pending: () => api.get('/approvals/pending').then((res: any) => res.data),
+  actorUsers: () => api.get('/approvals/actors/users').then((res: any) => res.data),
+  matchTemplates: (tableName: string, domain?: string, detail = true) =>
+    api.get('/approvals/templates/match', { params: { table_name: tableName, domain, detail: detail ? 1 : 0 } }).then((res: any) => res.data),
   templates: (detail?: boolean) => api.get('/approvals/templates', { params: detail ? { detail: 1 } : undefined }).then((res: any) => res.data),
   getTemplate: (id: number) => api.get(`/approvals/templates/${id}`).then((res: any) => res.data),
   createTemplate: (data: any) => api.post('/approvals/templates', data).then((res: any) => res.data),

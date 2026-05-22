@@ -126,33 +126,40 @@ const P10ManualTables: React.FC = () => {
 
   useEffect(() => {
     fetchRows();
-    approvalApi.templates().then((list: any[]) => {
-      const options = (list || []).map((it: any) => ({
-        label: `${it.flow_name}${it.domain ? `（${it.domain}）` : ''}`,
-        value: Number(it.id),
-      }));
-      setFlowTemplateOptions(options);
-    }).catch(() => undefined);
+    setFlowTemplateOptions([]);
   }, []);
 
   const openApprovalModal = async (record: ManualTableRow) => {
     setApprovalTable(record);
+    const domainForMatch = record.approval_domain || '';
+    try {
+      const rule = await approvalApi.matchTemplates(record.table_name, domainForMatch, false);
+      const options = (rule?.templates || []).map((it: any) => ({
+        label: `${it.flow_name}${it.domain ? `（${it.domain}）` : ''}`,
+        value: Number(it.id),
+      }));
+      setFlowTemplateOptions(options);
+    } catch {
+      setFlowTemplateOptions([]);
+    }
     try {
       const cfg: any = await tablesApi.getApprovalConfig(record.table_name);
+      const flowTemplateId = cfg.data?.flow_template_id || record.flow_template_id || null;
       approvalForm.setFieldsValue({
         domain: cfg.data?.domain || record.approval_domain || '',
-        approval_required: Number(cfg.data?.approval_required || 0),
+        approval_required: flowTemplateId ? 1 : 0,
         approver_role: cfg.data?.approver_role || record.approver_role || 'super_admin',
         approver_user_id: cfg.data?.approver_user_id || null,
-        flow_template_id: cfg.data?.flow_template_id || record.flow_template_id || null,
+        flow_template_id: flowTemplateId,
       });
     } catch {
+      const flowTemplateId = record.flow_template_id || null;
       approvalForm.setFieldsValue({
         domain: record.approval_domain || '',
-        approval_required: Number(record.approval_required || 0),
+        approval_required: flowTemplateId ? 1 : 0,
         approver_role: record.approver_role || 'super_admin',
         approver_user_id: record.approver_user_id || null,
-        flow_template_id: record.flow_template_id || null,
+        flow_template_id: flowTemplateId,
       });
     }
     setApprovalOpen(true);
@@ -163,12 +170,13 @@ const P10ManualTables: React.FC = () => {
     try {
       const values = await approvalForm.validateFields();
       setSavingApproval(true);
+      const finalFlowTemplateId = values.flow_template_id || null;
       await tablesApi.updateApprovalConfig(approvalTable.table_name, {
         domain: String(values.domain || '').trim(),
-        approval_required: Number(values.approval_required || 0),
+        approval_required: finalFlowTemplateId ? 1 : 0,
         approver_role: values.approver_role,
         approver_user_id: values.approver_user_id || null,
-        flow_template_id: values.flow_template_id || null,
+        flow_template_id: finalFlowTemplateId,
       });
       message.success('审批流配置已保存');
       setApprovalOpen(false);
@@ -612,6 +620,7 @@ const P10ManualTables: React.FC = () => {
           </Form.Item>
           <Form.Item name="approval_required" label="是否强制审批">
             <Select
+              disabled
               options={[
                 { value: 1, label: '需要审批' },
                 { value: 0, label: '不需要审批' },
@@ -632,14 +641,20 @@ const P10ManualTables: React.FC = () => {
             rules={[
               ({ getFieldValue }) => ({
                 validator(_, value) {
-                  if (Number(getFieldValue('approval_required') || 0) === 0) return Promise.resolve();
+                  if (flowTemplateOptions.length === 0) return Promise.resolve();
                   if (value) return Promise.resolve();
-                  return Promise.reject(new Error('启用审批时必须选择审批流模板'));
+                  return Promise.reject(new Error('当前表已命中审批规则，请选择审批流模板'));
                 },
               }),
             ]}
           >
-            <Select allowClear showSearch options={flowTemplateOptions} placeholder="请选择审批流模板" />
+            <Select
+              allowClear
+              showSearch
+              options={flowTemplateOptions}
+              placeholder={flowTemplateOptions.length ? '请选择审批流模板' : '当前表未命中模板'}
+              onChange={(v) => approvalForm.setFieldValue('approval_required', v ? 1 : 0)}
+            />
           </Form.Item>
         </Form>
       </Modal>

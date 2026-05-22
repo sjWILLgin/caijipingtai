@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Button, Form, Input, Select, Radio, Card, Space, message, Typography, Divider, Row, Col, Switch
+  Alert, Button, Form, Input, Select, Radio, Card, Space, message, Typography, Divider, Row, Col, Switch, Tag
 } from 'antd';
 import { SaveOutlined, ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
 import { plansApi, tablesApi } from '../services/api';
@@ -28,7 +28,29 @@ const P02PlanForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tables, setTables] = useState<any[]>([]);
+  const [approvalRule, setApprovalRule] = useState<any>({ requireApproval: 0, templates: [] });
   const isEdit = Boolean(planId);
+  const selectedTargetTable = Form.useWatch('target_table', form);
+  const selectedDomain = Form.useWatch('domain', form);
+
+  const fetchApprovalRule = async (targetTable?: string, domain?: string) => {
+    const tableName = String(targetTable || '').trim();
+    if (!tableName) {
+      setApprovalRule({ requireApproval: 0, templates: [] });
+      form.setFieldValue('require_approval', false);
+      return;
+    }
+    try {
+      const res: any = await plansApi.approvalRule(tableName, domain);
+      const data = res.data || {};
+      const required = Number(data.requireApproval || 0) === 1;
+      setApprovalRule({ requireApproval: required ? 1 : 0, templates: data.templates || [] });
+      form.setFieldValue('require_approval', required);
+    } catch {
+      setApprovalRule({ requireApproval: 0, templates: [] });
+      form.setFieldValue('require_approval', false);
+    }
+  };
 
   useEffect(() => {
     tablesApi.list().then((res: any) => {
@@ -50,6 +72,7 @@ const P02PlanForm: React.FC = () => {
           require_approval: plan.require_approval === 1,
           description: plan.description,
         });
+        fetchApprovalRule(plan.target_table, plan.domain);
         setLoading(false);
       }).catch(e => { message.error(e.message); setLoading(false); });
     } else {
@@ -61,6 +84,10 @@ const P02PlanForm: React.FC = () => {
       });
     }
   }, [planId]);
+
+  useEffect(() => {
+    fetchApprovalRule(selectedTargetTable, selectedDomain);
+  }, [selectedTargetTable, selectedDomain]);
 
   const handleSave = async (activate = true) => {
     try {
@@ -192,10 +219,58 @@ const P02PlanForm: React.FC = () => {
             </Col>
             <Col span={6}>
               <Form.Item name="require_approval" label="需要审批" valuePropName="checked">
-                <Switch checkedChildren="需要" unCheckedChildren="不需要" />
+                <Switch checkedChildren="需要" unCheckedChildren="不需要" disabled />
               </Form.Item>
             </Col>
           </Row>
+
+          {approvalRule.requireApproval === 1 ? (
+            <Card size="small" style={{ marginTop: 8, marginBottom: 8 }}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Alert
+                  showIcon
+                  type="warning"
+                  message="当前目标表命中审批模板，导入方案已强制开启审批，不能手动关闭"
+                />
+                {(approvalRule.templates || []).map((tpl: any) => (
+                  <Card
+                    key={tpl.id}
+                    size="small"
+                    title={`${tpl.flow_name} (${tpl.flow_code})`}
+                    extra={<Tag color="purple">节点数 {(tpl.nodes || []).length}</Tag>}
+                  >
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      {(tpl.nodes || []).map((node: any) => (
+                        <div key={`${tpl.id}_${node.node_order}`} style={{ padding: '4px 0' }}>
+                          <Space wrap>
+                            <Tag color="blue">节点{node.node_order}</Tag>
+                            <strong>{node.node_name}</strong>
+                            <Tag>{node.sign_type}</Tag>
+                            <Tag>{node.pass_rule}</Tag>
+                            <Tag>{node.reject_rule || 'ANY_REJECT'}</Tag>
+                            <span>
+                              审批人规则：{(node.actors || []).map((a: any) => {
+                                if (a.actor_type === 'USER') return `指定用户(${a.actor_value})`;
+                                if (a.actor_type === 'ROLE') return `角色(${a.actor_value})`;
+                                return '域管理员';
+                              }).join(' / ')}
+                            </span>
+                          </Space>
+                        </div>
+                      ))}
+                    </Space>
+                  </Card>
+                ))}
+              </Space>
+            </Card>
+          ) : (
+            <Alert
+              showIcon
+              type="info"
+              style={{ marginTop: 8, marginBottom: 8 }}
+              message="当前目标表未命中任何审批模板，方案审批固定为否"
+            />
+          )}
 
           <Divider />
           <Form.Item name="description" label="方案说明">
