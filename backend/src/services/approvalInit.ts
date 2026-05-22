@@ -1,4 +1,5 @@
 import pool from '../db';
+import { ensureApprovalRuleStateTable, rebuildApprovalRuleState } from './approvalRuleStateService';
 
 async function ensureColumn(table: string, column: string, ddl: string) {
   const [rows]: any = await pool.query(
@@ -252,4 +253,6 @@ export async function initApprovalTables() {
   );
 
   await seedDefaultFlowTemplates();
+  await ensureApprovalRuleStateTable();
+  await rebuildApprovalRuleState('INIT');
 }

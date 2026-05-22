@@ -40,6 +40,7 @@ const RULES: Rule[] = [
   { method: 'GET', path: /^\/tables$/, permission: 'table.view' },
   { method: 'GET', path: /^\/tables\/manual\/overview$/, permission: 'table.view' },
   { method: 'GET', path: /^\/tables\/[^/]+\/(activities|columns|template|data)$/, permission: 'table.view' },
+  { method: 'GET', path: /^\/tables\/[^/]+\/rule-state$/, permission: 'table.view' },
   { method: 'GET', path: /^\/tables\/[^/]+\/activities\/export$/, permission: 'table.view' },
   { method: 'PUT', path: /^\/tables\/[^/]+\/lifecycle$/, permission: 'table.lifecycle' },
   { method: 'GET', path: /^\/tables\/[^/]+\/approval-config$/, permission: 'table.lifecycle' },

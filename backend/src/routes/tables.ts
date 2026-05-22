@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { successResponse, errorResponse } from '../utils';
+import { getApprovalRuleStateByTable, syncApprovalRuleStateForTable } from '../services/approvalRuleStateService';
 
 const router = Router();
 const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
@@ -509,6 +510,29 @@ router.get('/:tableName/approval-config', async (req: Request, res: Response) =>
   }
 });
 
+router.get('/:tableName/rule-state', async (req: Request, res: Response) => {
+  try {
+    const authUser = (req as any).authUser;
+    const tableName = String(req.params.tableName || '').trim();
+    await ensureManualTable(tableName);
+
+    if (!authUser || (authUser.roleKey !== 'super_admin' && authUser.roleKey !== 'domain_admin' && authUser.roleKey !== 'analyst')) {
+      return res.status(403).json(errorResponse('无权限查看规则状态'));
+    }
+
+    const state = await getApprovalRuleStateByTable(tableName);
+    return res.json(successResponse(state || {
+      table_name: tableName,
+      rule_source: 'NONE',
+      approval_required_effective: 0,
+      status_code: 'NO_RULE',
+      status_message: '未配置表级审批规则',
+    }));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message));
+  }
+});
+
 router.put('/:tableName/approval-config', async (req: Request, res: Response) => {
   try {
     await ensureApprovalConfigTable();
@@ -572,6 +596,8 @@ router.put('/:tableName/approval-config', async (req: Request, res: Response) =>
          updated_by = VALUES(updated_by)`,
       [tableName, domain, approvalRequired, approverRole, approverUserId, flowTemplateId, Number(authUser.userId || 0)]
     );
+
+    await syncApprovalRuleStateForTable(tableName, 'TABLE_CONFIG');
 
     return res.json(successResponse(true, '审批配置已保存'));
   } catch (err: any) {

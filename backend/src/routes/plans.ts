@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { generatePlanId, generateRuleId, successResponse, errorResponse } from '../utils';
 import { getApprovalRuleByTable, getApprovalTemplateDetail } from '../services/approvalFlowService';
+import { getApprovalRuleStateByTable } from '../services/approvalRuleStateService';
 
 const router = Router();
 
@@ -21,6 +22,23 @@ async function resolvePlanApprovalRequirement(targetTable: string, domain: strin
   const tableName = String(targetTable || '').trim();
   if (!tableName || !/^[a-zA-Z0-9_]+$/.test(tableName)) {
     return { requireApproval: 0, matchedTemplateId: null, templates: [] as any[] };
+  }
+
+  // 优先读取元仓规则状态表：选择目标表时先看当前规则是否仍生效。
+  const state = await getApprovalRuleStateByTable(tableName);
+  if (state && Number(state.approval_required_effective || 0) === 1) {
+    const templateId = state.flow_template_id ? Number(state.flow_template_id) : null;
+    if (templateId) {
+      const detail = await getApprovalTemplateDetail(templateId);
+      if (detail && Number(detail.enabled || 0) === 1) {
+        return {
+          requireApproval: 1,
+          matchedTemplateId: templateId,
+          templates: [detail],
+        };
+      }
+    }
+    return { requireApproval: 1, matchedTemplateId: null, templates: [] as any[] };
   }
 
   // 优先走表级配置：只要该表被配置为强制审批，导入方案必须强制审批。

@@ -1,4 +1,5 @@
 import pool from '../db';
+import { rebuildApprovalRuleState } from './approvalRuleStateService';
 
 type SignType = 'SERIAL' | 'OR_SIGN' | 'AND_SIGN';
 type PassRule = 'ANY_PASS' | 'ALL_PASS' | 'MIN_PASS_COUNT';
@@ -349,6 +350,7 @@ export async function createApprovalTemplate(authUser: AuthUser, input: FlowTemp
     }
 
     await conn.commit();
+    await rebuildApprovalRuleState('TEMPLATE_CREATE');
     return templateId;
   } catch (err) {
     await conn.rollback();
@@ -414,6 +416,7 @@ export async function updateApprovalTemplate(authUser: AuthUser, templateId: num
     }
 
     await conn.commit();
+    await rebuildApprovalRuleState('TEMPLATE_UPDATE');
     return true;
   } catch (err) {
     await conn.rollback();
@@ -453,6 +456,7 @@ export async function publishApprovalTemplate(authUser: AuthUser, templateId: nu
     }
 
     await conn.commit();
+    await rebuildApprovalRuleState(enabled ? 'TEMPLATE_ENABLE' : 'TEMPLATE_DISABLE');
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -498,6 +502,7 @@ export async function deleteApprovalTemplate(authUser: AuthUser, templateId: num
     await conn.query('DELETE FROM approval_flow_template WHERE id = ?', [templateId]);
 
     await conn.commit();
+    await rebuildApprovalRuleState('TEMPLATE_DELETE');
     return true;
   } catch (err) {
     await conn.rollback();
