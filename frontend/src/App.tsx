@@ -16,6 +16,8 @@ import P09TaskList from './pages/P09TaskList';
 import P10ManualTables from './pages/P10ManualTables';
 import P11UserAdmin from './pages/P11UserAdmin';
 import P12OperationCenter from './pages/P12OperationCenter';
+import P13ApprovalCenter from './pages/P13ApprovalCenter';
+import P14ApprovalFlowTemplates from './pages/P14ApprovalFlowTemplates';
 import P99Auth from './pages/P99Auth';
 import { authApi } from './services/api';
 
@@ -23,7 +25,7 @@ type CurrentUser = {
   id: number;
   username: string;
   display_name: string;
-  role_key: 'super_admin' | 'analyst';
+  role_key: 'super_admin' | 'domain_admin' | 'analyst';
   permissions: string[];
 };
 
@@ -114,6 +116,12 @@ const App: React.FC = () => {
                 ) : null}
                 {currentUser.role_key === 'super_admin' ? (
                   <Route path="ops-center" element={<P12OperationCenter />} />
+                ) : null}
+                {currentUser.role_key === 'super_admin' || currentUser.role_key === 'domain_admin' ? (
+                  <Route path="approval-center" element={<P13ApprovalCenter />} />
+                ) : null}
+                {currentUser.role_key === 'super_admin' ? (
+                  <Route path="approval-templates" element={<P14ApprovalFlowTemplates />} />
                 ) : null}
               </Route>
               <Route path="/login" element={<Navigate to="/home" replace />} />

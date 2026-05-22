@@ -4,7 +4,7 @@ import {
   Button, Card, message, Typography, Space, Alert, Steps, Tag, Spin, Select, Descriptions, Checkbox, Modal
 } from 'antd';
 import { ArrowLeftOutlined, CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
-import { commitApi, tasksApi } from '../services/api';
+import { approvalApi, commitApi, tasksApi } from '../services/api';
 
 const { Title, Text } = Typography;
 
@@ -23,6 +23,9 @@ const P07CommitConfirm: React.FC = () => {
   const [committing, setCommitting] = useState(false);
   const [writeMode, setWriteMode] = useState('APPEND');
   const [riskConfirmed, setRiskConfirmed] = useState(false);
+  const [approvalHint, setApprovalHint] = useState('');
+  const [approvalStatus, setApprovalStatus] = useState<any>(null);
+  const [checkingApproval, setCheckingApproval] = useState(false);
 
   useEffect(() => {
     tasksApi.get(taskId!).then((res: any) => {
@@ -58,6 +61,7 @@ const P07CommitConfirm: React.FC = () => {
       onOk: async () => {
         setCommitting(true);
         try {
+          setApprovalHint('');
           await commitApi.commit(taskId!, {
             write_mode: writeMode,
             warning_confirmed: true,
@@ -67,11 +71,28 @@ const P07CommitConfirm: React.FC = () => {
           message.success('入库任务已提交，请在任务详情页查看结果');
           navigate(`/import-tasks/${taskId}`);
         } catch (e: any) {
+          const msg = String(e.message || '');
+          if (msg.includes('APPROVAL_')) {
+            setApprovalHint(msg);
+            refreshApprovalStatus();
+          }
           message.error(e.message);
           setCommitting(false);
         }
       }
     });
+  };
+
+  const refreshApprovalStatus = async () => {
+    try {
+      setCheckingApproval(true);
+      const row = await approvalApi.latestByTask(taskId!);
+      setApprovalStatus(row || null);
+    } catch (e: any) {
+      message.error(e.message || '刷新审批状态失败');
+    } finally {
+      setCheckingApproval(false);
+    }
   };
 
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />;
@@ -160,6 +181,32 @@ const P07CommitConfirm: React.FC = () => {
           </Checkbox>
         </Card>
       )}
+
+      {approvalHint ? (
+        <Card style={{ marginBottom: 16 }}>
+          <Alert
+            type="warning"
+            showIcon
+            message="审批未完成，当前不可进入最终写入"
+            description={
+              <div>
+                <div>{approvalHint}</div>
+                <div style={{ marginTop: 8 }}>
+                  <Button size="small" onClick={refreshApprovalStatus} loading={checkingApproval}>刷新审批状态</Button>
+                </div>
+                {approvalStatus ? (
+                  <div style={{ marginTop: 8 }}>
+                    <Tag color={approvalStatus.status === 'APPROVED' ? 'green' : approvalStatus.status === 'REJECTED' ? 'red' : 'orange'}>
+                      {approvalStatus.status}
+                    </Tag>
+                    <span>审批单号：{approvalStatus.request_no}</span>
+                  </div>
+                ) : null}
+              </div>
+            }
+          />
+        </Card>
+      ) : null}
     </div>
   );
 };

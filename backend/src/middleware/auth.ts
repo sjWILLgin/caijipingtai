@@ -9,7 +9,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'data_collection_platform_secret';
 export type AuthUser = {
   userId: number;
   username: string;
-  roleKey: 'super_admin' | 'analyst';
+  roleKey: 'super_admin' | 'domain_admin' | 'analyst';
 };
 
 export async function getUserPermissions(userId: number): Promise<PermissionKey[]> {
@@ -41,7 +41,7 @@ export function authRequired(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-export function requireRole(roleKey: 'super_admin' | 'analyst') {
+export function requireRole(roleKey: 'super_admin' | 'domain_admin' | 'analyst') {
   return (req: Request, res: Response, next: NextFunction) => {
     const authUser = (req as any).authUser as AuthUser | undefined;
     if (!authUser) {
@@ -49,6 +49,21 @@ export function requireRole(roleKey: 'super_admin' | 'analyst') {
     }
 
     if (authUser.roleKey !== roleKey) {
+      return res.status(403).json(errorResponse('无权限执行该操作'));
+    }
+
+    return next();
+  };
+}
+
+export function requireAnyRole(roleKeys: Array<'super_admin' | 'domain_admin' | 'analyst'>) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const authUser = (req as any).authUser as AuthUser | undefined;
+    if (!authUser) {
+      return res.status(401).json(errorResponse('未登录或登录已过期'));
+    }
+
+    if (!roleKeys.includes(authUser.roleKey)) {
       return res.status(403).json(errorResponse('无权限执行该操作'));
     }
 

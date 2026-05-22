@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import pool from '../db';
 import { errorResponse, successResponse } from '../utils';
 import { authRequired, requireRole, signAuthToken } from '../middleware/auth';
-import { ANALYST_DEFAULT_PERMISSIONS, isValidPermissionKey, PERMISSION_MATRIX, PermissionKey } from '../services/permissionMatrix';
+import { ANALYST_DEFAULT_PERMISSIONS, DOMAIN_ADMIN_DEFAULT_PERMISSIONS, isValidPermissionKey, PERMISSION_MATRIX, PermissionKey } from '../services/permissionMatrix';
 
 const router = Router();
 
@@ -38,7 +38,7 @@ async function getUserPermissionsById(userId: number): Promise<PermissionKey[]> 
   return rows.map((r: any) => r.perm_key as PermissionKey);
 }
 
-async function bindUserRole(userId: number, roleKey: 'super_admin' | 'analyst') {
+async function bindUserRole(userId: number, roleKey: 'super_admin' | 'domain_admin' | 'analyst') {
   await pool.query('DELETE FROM sys_user_role WHERE user_id = ?', [userId]);
   await pool.query(
     `INSERT INTO sys_user_role (user_id, role_id)
@@ -75,7 +75,7 @@ router.post('/register', async (req: Request, res: Response) => {
       return res.status(400).json(errorResponse('用户名已存在'));
     }
 
-    const roleKey: 'super_admin' | 'analyst' = 'analyst';
+    const roleKey: 'super_admin' | 'domain_admin' | 'analyst' = 'analyst';
 
     const passwordHash = await bcrypt.hash(password, 10);
     const [result]: any = await pool.query(
@@ -144,7 +144,7 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(401).json(errorResponse('用户名或密码错误'));
     }
 
-    const roleKey = (user.role_key || 'analyst') as 'super_admin' | 'analyst';
+    const roleKey = (user.role_key || 'analyst') as 'super_admin' | 'domain_admin' | 'analyst';
     const token = signAuthToken({ userId: user.id, username: user.username, roleKey });
     const permissions = roleKey === 'super_admin' ? PERMISSION_MATRIX.map((p) => p.key) : await getUserPermissionsById(user.id);
 
@@ -199,6 +199,44 @@ router.get('/users', authRequired, requireRole('super_admin'), async (_req: Requ
     return res.json(successResponse(rows));
   } catch (err: any) {
     return res.status(500).json(errorResponse(err.message || '获取用户列表失败'));
+  }
+});
+
+router.get('/users/:userId/domains', authRequired, requireRole('super_admin'), async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!userId) {
+      return res.status(400).json(errorResponse('用户ID无效'));
+    }
+
+    const [rows]: any = await pool.query(
+      'SELECT domain FROM sys_user_domain WHERE user_id = ? ORDER BY domain ASC',
+      [userId]
+    );
+    return res.json(successResponse(rows.map((r: any) => String(r.domain))));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '获取域绑定失败'));
+  }
+});
+
+router.put('/users/:userId/domains', authRequired, requireRole('super_admin'), async (req: Request, res: Response) => {
+  try {
+    const userId = Number(req.params.userId);
+    const rawDomains = Array.isArray(req.body?.domains) ? req.body.domains : [];
+    const domains = Array.from(new Set(rawDomains.map((d: any) => String(d).trim()).filter(Boolean)));
+
+    if (!userId) {
+      return res.status(400).json(errorResponse('用户ID无效'));
+    }
+
+    await pool.query('DELETE FROM sys_user_domain WHERE user_id = ?', [userId]);
+    for (const domain of domains) {
+      await pool.query('INSERT INTO sys_user_domain (user_id, domain) VALUES (?, ?)', [userId, domain]);
+    }
+
+    return res.json(successResponse(domains, '域绑定更新成功'));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '更新域绑定失败'));
   }
 });
 
@@ -274,8 +312,8 @@ router.put('/users/:userId/role', authRequired, requireRole('super_admin'), asyn
       return res.status(400).json(errorResponse('用户ID无效'));
     }
 
-    if (role_key !== 'super_admin' && role_key !== 'analyst') {
-      return res.status(400).json(errorResponse('角色仅支持 super_admin 或 analyst'));
+    if (role_key !== 'super_admin' && role_key !== 'domain_admin' && role_key !== 'analyst') {
+      return res.status(400).json(errorResponse('角色仅支持 super_admin / domain_admin / analyst'));
     }
 
     const targetUser = await getUserWithRoleById(userId);
@@ -308,10 +346,10 @@ router.put('/users/:userId/role', authRequired, requireRole('super_admin'), asyn
     }
 
     await bindUserRole(userId, role_key);
-    if (role_key === 'analyst') {
+    if (role_key === 'analyst' || role_key === 'domain_admin') {
       const existingPerms = await getUserPermissionsById(userId);
       if (!existingPerms.length) {
-        await replaceUserPermissions(userId, ANALYST_DEFAULT_PERMISSIONS);
+        await replaceUserPermissions(userId, role_key === 'domain_admin' ? DOMAIN_ADMIN_DEFAULT_PERMISSIONS : ANALYST_DEFAULT_PERMISSIONS);
       }
     }
     if (role_key === 'super_admin') {

@@ -13,8 +13,10 @@ import logsRouter from './routes/logs';
 import tablesRouter from './routes/tables';
 import jobsRouter from './routes/jobs';
 import dashboardRouter from './routes/dashboard';
+import approvalsRouter from './routes/approvals';
 import { initJobQueue } from './services/jobQueue';
 import { initAuthTables } from './services/authInit';
+import { initApprovalTables } from './services/approvalInit';
 import authRouter from './routes/auth';
 import { authRequired } from './middleware/auth';
 import { permissionGuard } from './middleware/permissionMap';
@@ -52,6 +54,7 @@ app.use('/api/logs', logsRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/approvals', approvalsRouter);
 
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -59,7 +62,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ success: false, message: err.message || '系统异常，请稍后重试' });
 });
 
-Promise.all([initJobQueue(), initAuthTables()])
+Promise.all([initJobQueue(), initAuthTables(), initApprovalTables()])
   .catch((e) => {
     console.error('初始化系统组件失败:', e.message);
   })

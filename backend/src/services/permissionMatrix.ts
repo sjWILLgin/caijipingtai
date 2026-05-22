@@ -14,7 +14,8 @@ export type PermissionKey =
   | 'table.delete'
   | 'dashboard.view'
   | 'audit.view'
-  | 'user.manage';
+  | 'user.manage'
+  | 'approval.manage';
 
 export const PERMISSION_MATRIX: Array<{ key: PermissionKey; label: string; module: string }> = [
   { key: 'plan.view', label: '查看导入方案', module: '导入方案' },
@@ -33,6 +34,7 @@ export const PERMISSION_MATRIX: Array<{ key: PermissionKey; label: string; modul
   { key: 'dashboard.view', label: '查看首页运营统计', module: '看板' },
   { key: 'audit.view', label: '查看日志与作业状态', module: '审计' },
   { key: 'user.manage', label: '用户与权限管理', module: '系统管理' },
+  { key: 'approval.manage', label: '审批流与审批处理', module: '系统管理' },
 ];
 
 export const ANALYST_DEFAULT_PERMISSIONS: PermissionKey[] = [
@@ -46,6 +48,21 @@ export const ANALYST_DEFAULT_PERMISSIONS: PermissionKey[] = [
   'table.view',
   'dashboard.view',
   'audit.view',
+];
+
+export const DOMAIN_ADMIN_DEFAULT_PERMISSIONS: PermissionKey[] = [
+  'plan.view',
+  'task.view',
+  'task.create',
+  'file.upload',
+  'mapping.edit',
+  'validation.run',
+  'commit.execute',
+  'table.view',
+  'table.lifecycle',
+  'dashboard.view',
+  'audit.view',
+  'approval.manage',
 ];
 
 export function isValidPermissionKey(key: string): key is PermissionKey {

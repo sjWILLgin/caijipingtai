@@ -42,12 +42,23 @@ const RULES: Rule[] = [
   { method: 'GET', path: /^\/tables\/[^/]+\/(activities|columns|template|data)$/, permission: 'table.view' },
   { method: 'GET', path: /^\/tables\/[^/]+\/activities\/export$/, permission: 'table.view' },
   { method: 'PUT', path: /^\/tables\/[^/]+\/lifecycle$/, permission: 'table.lifecycle' },
+  { method: 'GET', path: /^\/tables\/[^/]+\/approval-config$/, permission: 'table.lifecycle' },
+  { method: 'PUT', path: /^\/tables\/[^/]+\/approval-config$/, permission: 'table.lifecycle' },
   { method: 'DELETE', path: /^\/tables\/[^/]+$/, permission: 'table.delete' },
 
   { method: 'GET', path: /^\/dashboard\/stats$/, permission: 'dashboard.view' },
 
   { method: 'GET', path: /^\/logs\/[^/]+$/, permission: 'audit.view' },
   { method: 'GET', path: /^\/jobs(\/.*)?$/, permission: 'audit.view' },
+  { method: 'GET', path: /^\/approvals\/my$/, permission: 'task.view' },
+  { method: 'GET', path: /^\/approvals\/pending$/, permission: 'approval.manage' },
+  { method: 'GET', path: /^\/approvals\/templates$/, permission: 'approval.manage' },
+  { method: 'GET', path: /^\/approvals\/templates\/[^/]+$/, permission: 'approval.manage' },
+  { method: 'POST', path: /^\/approvals\/templates$/, permission: 'approval.manage' },
+  { method: 'PUT', path: /^\/approvals\/templates\/[^/]+$/, permission: 'approval.manage' },
+  { method: 'POST', path: /^\/approvals\/templates\/[^/]+\/publish$/, permission: 'approval.manage' },
+  { method: 'GET', path: /^\/approvals\/task\/[^/]+\/latest$/, permission: 'task.view' },
+  { method: 'POST', path: /^\/approvals\/[^/]+\/(approve|reject)$/, permission: 'approval.manage' },
 ];
 
 function findPermission(method: string, path: string) {

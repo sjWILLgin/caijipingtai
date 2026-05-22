@@ -53,6 +53,7 @@ export async function initAuthTables() {
   await pool.query(
     `INSERT IGNORE INTO sys_role (role_key, role_name) VALUES
       ('super_admin', '超级管理员'),
+      ('domain_admin', '域管理员'),
       ('analyst', '分析师')`
   );
 

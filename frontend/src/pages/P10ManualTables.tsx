@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Card, DatePicker, Drawer, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { DeleteOutlined, FileSearchOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
-import { tablesApi } from '../services/api';
+import { approvalApi, tablesApi } from '../services/api';
 
 const { Title, Text } = Typography;
 
@@ -63,6 +63,17 @@ type ManualTableRow = {
   latest_valid_batch_id?: string | null;
   latest_valid_batch_time?: string | null;
   last_cleanup_at?: string | null;
+  approval_domain?: string | null;
+  approval_required?: number;
+  approver_role?: 'super_admin' | 'domain_admin';
+  approver_user_id?: number | null;
+  flow_template_id?: number | null;
+  flow_template_name?: string | null;
+};
+
+type FlowTemplateOption = {
+  label: string;
+  value: number;
 };
 
 const P10ManualTables: React.FC = () => {
@@ -92,6 +103,11 @@ const P10ManualTables: React.FC = () => {
     range: null,
   });
   const [form] = Form.useForm();
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [savingApproval, setSavingApproval] = useState(false);
+  const [approvalTable, setApprovalTable] = useState<ManualTableRow | null>(null);
+  const [approvalForm] = Form.useForm();
+  const [flowTemplateOptions, setFlowTemplateOptions] = useState<FlowTemplateOption[]>([]);
 
   const totalRows = useMemo(() => rows.reduce((acc, it) => acc + (it.row_count || 0), 0), [rows]);
   const totalSizeMb = useMemo(() => rows.reduce((acc, it) => acc + (it.size_mb || 0), 0), [rows]);
@@ -110,7 +126,61 @@ const P10ManualTables: React.FC = () => {
 
   useEffect(() => {
     fetchRows();
+    approvalApi.templates().then((list: any[]) => {
+      const options = (list || []).map((it: any) => ({
+        label: `${it.flow_name}${it.domain ? `（${it.domain}）` : ''}`,
+        value: Number(it.id),
+      }));
+      setFlowTemplateOptions(options);
+    }).catch(() => undefined);
   }, []);
+
+  const openApprovalModal = async (record: ManualTableRow) => {
+    setApprovalTable(record);
+    try {
+      const cfg: any = await tablesApi.getApprovalConfig(record.table_name);
+      approvalForm.setFieldsValue({
+        domain: cfg.data?.domain || record.approval_domain || '',
+        approval_required: Number(cfg.data?.approval_required || 0),
+        approver_role: cfg.data?.approver_role || record.approver_role || 'super_admin',
+        approver_user_id: cfg.data?.approver_user_id || null,
+        flow_template_id: cfg.data?.flow_template_id || record.flow_template_id || null,
+      });
+    } catch {
+      approvalForm.setFieldsValue({
+        domain: record.approval_domain || '',
+        approval_required: Number(record.approval_required || 0),
+        approver_role: record.approver_role || 'super_admin',
+        approver_user_id: record.approver_user_id || null,
+        flow_template_id: record.flow_template_id || null,
+      });
+    }
+    setApprovalOpen(true);
+  };
+
+  const saveApprovalConfig = async () => {
+    if (!approvalTable) return;
+    try {
+      const values = await approvalForm.validateFields();
+      setSavingApproval(true);
+      await tablesApi.updateApprovalConfig(approvalTable.table_name, {
+        domain: String(values.domain || '').trim(),
+        approval_required: Number(values.approval_required || 0),
+        approver_role: values.approver_role,
+        approver_user_id: values.approver_user_id || null,
+        flow_template_id: values.flow_template_id || null,
+      });
+      message.success('审批流配置已保存');
+      setApprovalOpen(false);
+      setApprovalTable(null);
+      await fetchRows();
+    } catch (e: any) {
+      if (e?.errorFields) return;
+      message.error(e.message || '保存审批配置失败');
+    } finally {
+      setSavingApproval(false);
+    }
+  };
 
   const openLifecycleModal = (record: ManualTableRow) => {
     setEditingTable(record);
@@ -243,6 +313,17 @@ const P10ManualTables: React.FC = () => {
       ),
     },
     {
+      title: '审批流',
+      key: 'approval',
+      width: 220,
+      render: (_: any, r: ManualTableRow) => (
+        <Space>
+          {Number(r.approval_required || 0) === 1 ? <Tag color="red">强制审批</Tag> : <Tag>不审批</Tag>}
+          {r.flow_template_name ? <Tag color="purple">{r.flow_template_name}</Tag> : <Tag>未绑定模板</Tag>}
+        </Space>
+      ),
+    },
+    {
       title: '最近上传批次',
       key: 'latest_valid_batch_id',
       width: 260,
@@ -264,6 +345,9 @@ const P10ManualTables: React.FC = () => {
         <Space>
           <Button size="small" icon={<SettingOutlined />} onClick={() => openLifecycleModal(r)}>
             生命周期
+          </Button>
+          <Button size="small" onClick={() => openApprovalModal(r)}>
+            审批流
           </Button>
           <Button size="small" icon={<FileSearchOutlined />} onClick={() => openTrace(r)}>
             查看留痕
@@ -510,6 +594,55 @@ const P10ManualTables: React.FC = () => {
           ]}
         />
       </Drawer>
+
+      <Modal
+        title={approvalTable ? `审批流配置：${approvalTable.table_name}` : '审批流配置'}
+        open={approvalOpen}
+        onCancel={() => {
+          setApprovalOpen(false);
+          setApprovalTable(null);
+        }}
+        onOk={saveApprovalConfig}
+        okText="保存"
+        confirmLoading={savingApproval}
+      >
+        <Form form={approvalForm} layout="vertical">
+          <Form.Item name="domain" label="所属业务域" rules={[{ required: true, message: '请输入业务域' }]}>
+            <Input placeholder="例如：销售数据域" />
+          </Form.Item>
+          <Form.Item name="approval_required" label="是否强制审批">
+            <Select
+              options={[
+                { value: 1, label: '需要审批' },
+                { value: 0, label: '不需要审批' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="approver_role" label="审批角色" rules={[{ required: true, message: '请选择审批角色' }]}>
+            <Select
+              options={[
+                { value: 'super_admin', label: '超级管理员' },
+                { value: 'domain_admin', label: '域管理员' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            name="flow_template_id"
+            label="审批流模板"
+            rules={[
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (Number(getFieldValue('approval_required') || 0) === 0) return Promise.resolve();
+                  if (value) return Promise.resolve();
+                  return Promise.reject(new Error('启用审批时必须选择审批流模板'));
+                },
+              }),
+            ]}
+          >
+            <Select allowClear showSearch options={flowTemplateOptions} placeholder="请选择审批流模板" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

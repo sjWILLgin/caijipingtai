@@ -40,9 +40,12 @@ export const authApi = {
   listUsers: () => api.get('/auth/users').then((res: any) => res.data),
   permissionMatrix: () => api.get('/auth/permission-matrix').then((res: any) => res.data),
   getUserPermissions: (userId: number) => api.get(`/auth/users/${userId}/permissions`).then((res: any) => res.data),
+  getUserDomains: (userId: number) => api.get(`/auth/users/${userId}/domains`).then((res: any) => res.data),
+  updateUserDomains: (userId: number, domains: string[]) =>
+    api.put(`/auth/users/${userId}/domains`, { domains }).then((res: any) => res.data),
   updateUserPermissions: (userId: number, permissions: string[]) =>
     api.put(`/auth/users/${userId}/permissions`, { permissions }).then((res: any) => res.data),
-  updateUserRole: (userId: number, roleKey: 'super_admin' | 'analyst') =>
+  updateUserRole: (userId: number, roleKey: 'super_admin' | 'domain_admin' | 'analyst') =>
     api.put(`/auth/users/${userId}/role`, { role_key: roleKey }).then((res: any) => res.data),
   resetUserPassword: (userId: number, newPassword: string) =>
     api.post(`/auth/users/${userId}/reset-password`, { new_password: newPassword }),
@@ -127,6 +130,11 @@ export const logsApi = {
 export const tablesApi = {
   list: () => api.get('/tables'),
   getManualOverview: () => api.get('/tables/manual/overview'),
+  getApprovalConfig: (tableName: string) => api.get(`/tables/${encodeURIComponent(tableName)}/approval-config`),
+  updateApprovalConfig: (
+    tableName: string,
+    data: { domain: string; approval_required: number; approver_role: 'super_admin' | 'domain_admin'; approver_user_id?: number | null; flow_template_id?: number | null }
+  ) => api.put(`/tables/${encodeURIComponent(tableName)}/approval-config`, data),
   getActivities: (tableName: string, params?: any) => api.get(`/tables/${encodeURIComponent(tableName)}/activities`, { params }),
   exportActivitiesUrl: (tableName: string, params?: Record<string, any>) => {
     const usp = new URLSearchParams();
@@ -144,6 +152,19 @@ export const tablesApi = {
   getColumns: (tableName: string) => api.get(`/tables/${tableName}/columns`),
   getData: (tableName: string, params?: any) => api.get(`/tables/${tableName}/data`, { params }),
   downloadTemplate: (tableName: string) => withToken(`/api/tables/${encodeURIComponent(tableName)}/template`),
+};
+
+export const approvalApi = {
+  my: () => api.get('/approvals/my').then((res: any) => res.data),
+  pending: () => api.get('/approvals/pending').then((res: any) => res.data),
+  templates: (detail?: boolean) => api.get('/approvals/templates', { params: detail ? { detail: 1 } : undefined }).then((res: any) => res.data),
+  getTemplate: (id: number) => api.get(`/approvals/templates/${id}`).then((res: any) => res.data),
+  createTemplate: (data: any) => api.post('/approvals/templates', data).then((res: any) => res.data),
+  updateTemplate: (id: number, data: any) => api.put(`/approvals/templates/${id}`, data).then((res: any) => res.data),
+  publishTemplate: (id: number, enabled: boolean) => api.post(`/approvals/templates/${id}/publish`, { enabled }).then((res: any) => res.data),
+  latestByTask: (taskId: string) => api.get(`/approvals/task/${taskId}/latest`).then((res: any) => res.data),
+  approve: (id: number, comment?: string) => api.post(`/approvals/${id}/approve`, { comment }),
+  reject: (id: number, comment?: string) => api.post(`/approvals/${id}/reject`, { comment }),
 };
 
 // Dashboard API

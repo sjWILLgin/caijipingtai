@@ -6,7 +6,7 @@ type UserRow = {
   id: number;
   username: string;
   display_name: string;
-  role_key: 'super_admin' | 'analyst';
+  role_key: 'super_admin' | 'domain_admin' | 'analyst';
   is_active: number;
   created_at: string;
 };
@@ -32,6 +32,9 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
   const [resetPwdOpen, setResetPwdOpen] = useState(false);
   const [resetPwdValue, setResetPwdValue] = useState('');
   const [resetTargetUser, setResetTargetUser] = useState<UserRow | null>(null);
+  const [domainModalOpen, setDomainModalOpen] = useState(false);
+  const [domainTargetUser, setDomainTargetUser] = useState<UserRow | null>(null);
+  const [domainValues, setDomainValues] = useState<string[]>([]);
 
   const loadUsers = async () => {
     try {
@@ -50,7 +53,7 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
     loadUsers();
   }, []);
 
-  const updateRole = async (userId: number, roleKey: 'super_admin' | 'analyst') => {
+  const updateRole = async (userId: number, roleKey: 'super_admin' | 'domain_admin' | 'analyst') => {
     try {
       setLoading(true);
       const result = await authApi.updateUserRole(userId, roleKey);
@@ -143,13 +146,44 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
     }
   };
 
+  const openDomainModal = async (user: UserRow) => {
+    try {
+      setLoading(true);
+      const domains = await authApi.getUserDomains(user.id);
+      setDomainTargetUser(user);
+      setDomainValues(Array.isArray(domains) ? domains : []);
+      setDomainModalOpen(true);
+    } catch (err: any) {
+      message.error(err.message || '加载域绑定失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveUserDomains = async () => {
+    if (!domainTargetUser) return;
+    try {
+      setLoading(true);
+      await authApi.updateUserDomains(domainTargetUser.id, domainValues);
+      message.success('域绑定已更新');
+      setDomainModalOpen(false);
+      setDomainTargetUser(null);
+      setDomainValues([]);
+      await loadUsers();
+    } catch (err: any) {
+      message.error(err.message || '更新域绑定失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Card>
       <Typography.Title level={4} style={{ marginTop: 0 }}>
         用户与权限管理
       </Typography.Title>
       <Typography.Paragraph type="secondary" style={{ marginTop: -6 }}>
-        当前最小化权限模型：超级管理员、分析师。
+        当前最小化权限模型：超级管理员、域管理员、分析师。
       </Typography.Paragraph>
 
       <Table<UserRow>
@@ -166,7 +200,7 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
             dataIndex: 'role_key',
             render: (role: string) => (
               <Tag color={role === 'super_admin' ? 'gold' : 'blue'}>
-                {role === 'super_admin' ? '超级管理员' : '分析师'}
+                {role === 'super_admin' ? '超级管理员' : role === 'domain_admin' ? '域管理员' : '分析师'}
               </Tag>
             ),
           },
@@ -181,6 +215,7 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
                   onChange={(value) => updateRole(record.id, value)}
                   options={[
                     { label: '超级管理员', value: 'super_admin' },
+                    { label: '域管理员', value: 'domain_admin' },
                     { label: '分析师', value: 'analyst' },
                   ]}
                 />
@@ -192,6 +227,9 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
                 ) : (
                   <Tag color="gold">全权限</Tag>
                 )}
+                <Tag color="cyan" style={{ cursor: 'pointer' }} onClick={() => openDomainModal(record)}>
+                  域绑定
+                </Tag>
                 <Tag color="red" style={{ cursor: 'pointer' }} onClick={() => openResetPassword(record)}>
                   重置密码
                 </Tag>
@@ -278,6 +316,32 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
           value={resetPwdValue}
           onChange={(e) => setResetPwdValue(e.target.value)}
           placeholder="至少6位"
+        />
+      </Modal>
+
+      <Modal
+        title={`域绑定：${domainTargetUser?.display_name || ''}`}
+        open={domainModalOpen}
+        onCancel={() => {
+          if (loading) return;
+          setDomainModalOpen(false);
+          setDomainTargetUser(null);
+          setDomainValues([]);
+        }}
+        onOk={saveUserDomains}
+        okText="保存域绑定"
+        okButtonProps={{ loading }}
+      >
+        <Typography.Paragraph type="secondary">
+          输入并回车可新增域。域管理员仅可处理其绑定域内的审批。
+        </Typography.Paragraph>
+        <Select
+          mode="tags"
+          style={{ width: '100%' }}
+          value={domainValues}
+          onChange={(vals) => setDomainValues((vals || []).map((v) => String(v).trim()).filter(Boolean))}
+          placeholder="例如：销售域、供应链域"
+          tokenSeparators={[',', '，', ' ']}
         />
       </Modal>
     </Card>

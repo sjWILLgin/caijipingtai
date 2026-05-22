@@ -3,9 +3,18 @@ import pool from '../db';
 import { generateBatchId, successResponse, errorResponse } from '../utils';
 import { commitData } from '../services/commitService';
 import { enqueueJob } from '../services/jobQueue';
+import { createCommitApprovalInstance, getLatestCommitApprovalState } from '../services/approvalFlowService';
 
 const router = Router();
 const META_DB = process.env.META_DB_NAME || 'data_collection_meta';
+
+function generateApprovalNo() {
+  const d = new Date();
+  const datePart = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const timePart = `${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `APR${datePart}${timePart}${rand}`;
+}
 
 function isSafeIdentifier(name: string) {
   return /^[a-zA-Z0-9_]+$/.test(name);
@@ -45,8 +54,12 @@ async function restoreFromSnapshot(targetTable: string, snapshotTable: string) {
 // POST /api/commit/:taskId - 提交入库
 router.post('/:taskId', async (req: Request, res: Response) => {
   try {
+    const authUser = (req as any).authUser;
     const { taskId } = req.params;
-    const { write_mode = 'APPEND', write_scope, warning_confirmed = false, operator_id = 'user01', operator_name = '业务用户' } = req.body;
+    const { write_mode = 'APPEND', write_scope, warning_confirmed = false, operator_id, operator_name } = req.body;
+
+    const finalOperatorId = operator_id || String(authUser?.userId || 'user01');
+    const finalOperatorName = operator_name || String(authUser?.username || '业务用户');
 
     const [taskRows]: any = await pool.query('SELECT * FROM import_task WHERE task_id = ?', [taskId]);
     if (!taskRows.length) return res.status(404).json(errorResponse('任务不存在'));
@@ -58,6 +71,120 @@ router.post('/:taskId', async (req: Request, res: Response) => {
 
     if (task.blocking_error_count > 0) {
       return res.status(400).json(errorResponse('VALIDATION_BLOCKED: 存在阻断错误，请下载错误明细并修正后重新提交'));
+    }
+
+    const [planRows]: any = await pool.query(
+      `SELECT p.plan_name, p.domain, p.target_table, p.require_approval
+       FROM import_plan p
+       WHERE p.plan_id = ? AND p.version = ?
+       LIMIT 1`,
+      [task.plan_id, task.plan_version]
+    );
+
+    const plan = planRows[0] || {};
+    const targetTable = String(plan.target_table || '').trim();
+
+    const [cfgRows]: any = await pool.query(
+      `SELECT table_name, domain, approval_required, approver_role, approver_user_id, flow_template_id
+       FROM manual_table_approval_config
+       WHERE table_name = ?
+       LIMIT 1`,
+      [targetTable]
+    );
+
+    const tableCfg = cfgRows[0] || null;
+    const approvalRequired = Number(plan.require_approval || 0) === 1 || Number(tableCfg?.approval_required || 0) === 1;
+
+    if (approvalRequired) {
+      const flowTemplateId = tableCfg?.flow_template_id ? Number(tableCfg.flow_template_id) : 0;
+
+      if (flowTemplateId > 0) {
+        const latestFlowReq = await getLatestCommitApprovalState(taskId);
+
+        if (!latestFlowReq) {
+          await createCommitApprovalInstance({
+            taskId,
+            targetTable: targetTable || null,
+            domain: String(tableCfg?.domain || plan.domain || '') || null,
+            applicantId: Number(authUser?.userId || 0),
+            applicantName: String(authUser?.username || finalOperatorName),
+            flowTemplateId,
+            snapshot: {
+              task_id: taskId,
+              plan_name: plan.plan_name || null,
+              target_table: targetTable || null,
+              write_mode,
+              success_count: Number(task.success_count || 0),
+            },
+          });
+          return res.status(409).json(errorResponse('APPROVAL_REQUIRED: 已发起审批流，请等待审批通过后再提交。'));
+        }
+
+        if (latestFlowReq.status === 'PENDING') {
+          return res.status(409).json(errorResponse('APPROVAL_PENDING: 审批流尚未完成，请等待或刷新审批状态。'));
+        }
+
+        if (latestFlowReq.status === 'REJECTED') {
+          return res.status(400).json(errorResponse('APPROVAL_REJECTED: 审批流已驳回，请修改后重新发起。'));
+        }
+      } else {
+      const [reqRows]: any = await pool.query(
+        `SELECT *
+         FROM approval_request
+         WHERE task_id = ? AND approval_type = 'COMMIT'
+         ORDER BY id DESC
+         LIMIT 1`,
+        [taskId]
+      );
+
+      const latestReq = reqRows[0] || null;
+
+      if (!latestReq) {
+        const requestNo = generateApprovalNo();
+        const approverRole = (tableCfg?.approver_role || 'super_admin') as 'super_admin' | 'domain_admin';
+        const approverUserId = tableCfg?.approver_user_id ? Number(tableCfg.approver_user_id) : null;
+        const domain = String(tableCfg?.domain || plan.domain || '');
+
+        const [insertRet]: any = await pool.query(
+          `INSERT INTO approval_request
+            (request_no, approval_type, task_id, target_table, domain, applicant_id, applicant_name, approver_role, approver_user_id, status, reason, snapshot)
+           VALUES (?, 'COMMIT', ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+          [
+            requestNo,
+            taskId,
+            targetTable || null,
+            domain || null,
+            Number(authUser?.userId || 0),
+            String(authUser?.username || finalOperatorName),
+            approverRole,
+            approverUserId,
+            `提交入库审批：${taskId}`,
+            JSON.stringify({
+              task_id: taskId,
+              plan_name: plan.plan_name || null,
+              target_table: targetTable || null,
+              write_mode,
+              success_count: Number(task.success_count || 0),
+            }),
+          ]
+        );
+
+        await pool.query(
+          'INSERT INTO approval_action (request_id, action, operator_id, operator_name, comment) VALUES (?, ?, ?, ?, ?)',
+          [Number(insertRet.insertId), 'CREATE', Number(authUser?.userId || 0), String(authUser?.username || finalOperatorName), '自动发起提交审批']
+        );
+
+        return res.status(409).json(errorResponse('APPROVAL_REQUIRED: 已发起审批，请等待审批通过后再提交。'));
+      }
+
+      if (latestReq.status === 'PENDING') {
+        return res.status(409).json(errorResponse('APPROVAL_PENDING: 审批尚未完成，请等待或刷新审批状态。'));
+      }
+
+      if (latestReq.status === 'REJECTED') {
+        return res.status(400).json(errorResponse('APPROVAL_REJECTED: 审批已驳回，请修改后重新发起。'));
+      }
+      }
     }
 
     // Idempotency check
@@ -77,7 +204,7 @@ router.post('/:taskId', async (req: Request, res: Response) => {
     const batch_id = generateBatchId();
 
     const job = await enqueueJob(taskId, 'COMMIT', async () => {
-      await commitData(taskId, batch_id, write_mode, write_scope, operator_id, operator_name);
+      await commitData(taskId, batch_id, write_mode, write_scope, finalOperatorId, finalOperatorName);
       return { task_id: taskId, batch_id, stage: 'COMMIT' };
     });
 

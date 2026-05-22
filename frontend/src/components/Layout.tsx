@@ -11,7 +11,7 @@ type Props = {
     id: number;
     username: string;
     display_name: string;
-    role_key: 'super_admin' | 'analyst';
+    role_key: 'super_admin' | 'domain_admin' | 'analyst';
   };
   onLogout: () => void;
 };
@@ -30,6 +30,8 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     if (location.pathname.startsWith('/manual-tables')) return 'manual-tables';
     if (location.pathname.startsWith('/user-admin')) return 'user-admin';
     if (location.pathname.startsWith('/ops-center')) return 'ops-center';
+    if (location.pathname.startsWith('/approval-center')) return 'approval-center';
+    if (location.pathname.startsWith('/approval-templates')) return 'approval-templates';
     return 'home';
   };
 
@@ -49,6 +51,8 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     if (p === '/manual-tables') return [{ title: '运维监控' }, { title: '手工数据表清单' }];
     if (p === '/user-admin') return [{ title: '系统管理' }, { title: '用户权限' }];
     if (p === '/ops-center') return [{ title: '系统管理' }, { title: '信息中心' }];
+    if (p === '/approval-center') return [{ title: '系统管理' }, { title: '审批中心' }];
+    if (p === '/approval-templates') return [{ title: '系统管理' }, { title: '审批流模板' }];
     return [{ title: '导入方案' }];
   };
 
@@ -114,7 +118,11 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
         <Space>
           <Tag color="blue">本地环境</Tag>
           <Tag color={currentUser.role_key === 'super_admin' ? 'gold' : 'geekblue'}>
-            {currentUser.role_key === 'super_admin' ? '超级管理员' : '分析师'}
+            {currentUser.role_key === 'super_admin'
+              ? '超级管理员'
+              : currentUser.role_key === 'domain_admin'
+                ? '域管理员'
+                : '分析师'}
           </Tag>
           <Dropdown menu={{ items: accountMenuItems }} trigger={['click']}>
             <Button
@@ -162,6 +170,16 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
                 label: '手工数据表',
                 onClick: () => navigate('/manual-tables'),
               },
+              ...((currentUser.role_key === 'super_admin' || currentUser.role_key === 'domain_admin')
+                ? [
+                    {
+                      key: 'approval-center',
+                      icon: <BellOutlined />,
+                      label: '审批中心',
+                      onClick: () => navigate('/approval-center'),
+                    },
+                  ]
+                : []),
               ...(currentUser.role_key === 'super_admin'
                 ? [
                     {
@@ -175,6 +193,12 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
                       icon: <BellOutlined />,
                       label: '信息中心',
                       onClick: () => navigate('/ops-center'),
+                    },
+                    {
+                      key: 'approval-templates',
+                      icon: <FileTextOutlined />,
+                      label: '审批流模板',
+                      onClick: () => navigate('/approval-templates'),
                     },
                   ]
                 : []),

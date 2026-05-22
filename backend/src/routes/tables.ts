@@ -17,6 +17,16 @@ const CORE_TABLES = new Set([
   'validate_error',
   'validate_rule',
   'manual_table_lifecycle',
+  'manual_table_approval_config',
+  'approval_request',
+  'approval_action',
+  'approval_flow_template',
+  'approval_flow_node',
+  'approval_flow_node_actor',
+  'approval_instance',
+  'approval_instance_node',
+  'approval_instance_action',
+  'sys_user_domain',
 ]);
 
 async function ensureLifecycleTable() {
@@ -32,6 +42,36 @@ async function ensureLifecycleTable() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
   );
+}
+
+async function ensureApprovalConfigTable() {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS manual_table_approval_config (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      table_name VARCHAR(128) NOT NULL UNIQUE,
+      domain VARCHAR(64) NOT NULL DEFAULT '',
+      approval_required TINYINT DEFAULT 0,
+      approver_role ENUM('super_admin', 'domain_admin') DEFAULT 'super_admin',
+      approver_user_id INT NULL,
+      flow_template_id INT NULL,
+      updated_by INT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_domain (domain),
+      KEY idx_approver_user (approver_user_id),
+      KEY idx_flow_template (flow_template_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+
+  const [flowTplColRows]: any = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'manual_table_approval_config' AND COLUMN_NAME = 'flow_template_id'`
+  );
+  if (!flowTplColRows.length) {
+    await pool.query('ALTER TABLE manual_table_approval_config ADD COLUMN flow_template_id INT NULL');
+    await pool.query('ALTER TABLE manual_table_approval_config ADD KEY idx_flow_template (flow_template_id)');
+  }
 }
 
 function isValidTableName(tableName: string) {
@@ -307,6 +347,7 @@ router.get('/', async (req: Request, res: Response) => {
 router.get('/manual/overview', async (req: Request, res: Response) => {
   try {
     await ensureLifecycleTable();
+    await ensureApprovalConfigTable();
 
     const [rows]: any = await pool.query(
       `SELECT
@@ -320,10 +361,18 @@ router.get('/manual/overview', async (req: Request, res: Response) => {
          l.lifecycle_days,
          l.cleanup_strategy,
          l.last_cleanup_at,
+         ac.domain AS approval_domain,
+         ac.approval_required,
+         ac.approver_role,
+         ac.approver_user_id,
+         ac.flow_template_id,
+         ft.flow_name AS flow_template_name,
          b.batch_id AS latest_valid_batch_id,
          b.created_at AS latest_valid_batch_time
        FROM INFORMATION_SCHEMA.TABLES t
        LEFT JOIN manual_table_lifecycle l ON l.table_name = t.TABLE_NAME
+       LEFT JOIN manual_table_approval_config ac ON ac.table_name = t.TABLE_NAME
+       LEFT JOIN approval_flow_template ft ON ft.id = ac.flow_template_id
        LEFT JOIN (
          SELECT ib1.target_table, ib1.batch_id, ib1.created_at
          FROM import_batch ib1
@@ -351,6 +400,12 @@ router.get('/manual/overview', async (req: Request, res: Response) => {
       lifecycle_days: r.lifecycle_days !== null && r.lifecycle_days !== undefined ? Number(r.lifecycle_days) : 365,
       cleanup_strategy: r.cleanup_strategy || 'DELETE_ROWS',
       last_cleanup_at: r.last_cleanup_at || null,
+      approval_domain: r.approval_domain || null,
+      approval_required: Number(r.approval_required || 0),
+      approver_role: r.approver_role || 'super_admin',
+      approver_user_id: r.approver_user_id !== null && r.approver_user_id !== undefined ? Number(r.approver_user_id) : null,
+      flow_template_id: r.flow_template_id !== null && r.flow_template_id !== undefined ? Number(r.flow_template_id) : null,
+      flow_template_name: r.flow_template_name || null,
       latest_valid_batch_id: r.latest_valid_batch_id || null,
       latest_valid_batch_time: r.latest_valid_batch_time || null,
     }));
@@ -358,6 +413,116 @@ router.get('/manual/overview', async (req: Request, res: Response) => {
     res.json(successResponse(tables));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
+  }
+});
+
+router.get('/:tableName/approval-config', async (req: Request, res: Response) => {
+  try {
+    await ensureApprovalConfigTable();
+    const authUser = (req as any).authUser;
+    const tableName = String(req.params.tableName || '').trim();
+    await ensureManualTable(tableName);
+
+    if (!authUser || (authUser.roleKey !== 'super_admin' && authUser.roleKey !== 'domain_admin')) {
+      return res.status(403).json(errorResponse('仅超管或域管理员可查看审批配置'));
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT table_name, domain, approval_required, approver_role, approver_user_id, flow_template_id, updated_at
+       FROM manual_table_approval_config
+       WHERE table_name = ?
+       LIMIT 1`,
+      [tableName]
+    );
+    const row = rows[0] || {
+      table_name: tableName,
+      domain: '',
+      approval_required: 0,
+      approver_role: 'super_admin',
+      approver_user_id: null,
+      flow_template_id: null,
+    };
+
+    if (authUser.roleKey === 'domain_admin') {
+      const [domainRows]: any = await pool.query('SELECT domain FROM sys_user_domain WHERE user_id = ?', [authUser.userId]);
+      const domains = domainRows.map((r: any) => String(r.domain));
+      if (row.domain && !domains.includes(String(row.domain))) {
+        return res.status(403).json(errorResponse('无权限查看该域的审批配置'));
+      }
+    }
+
+    return res.json(successResponse(row));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message));
+  }
+});
+
+router.put('/:tableName/approval-config', async (req: Request, res: Response) => {
+  try {
+    await ensureApprovalConfigTable();
+    const authUser = (req as any).authUser;
+    const tableName = String(req.params.tableName || '').trim();
+    const domain = String(req.body?.domain || '').trim();
+    const approvalRequired = Number(req.body?.approval_required ? 1 : 0);
+    const approverRole = String(req.body?.approver_role || 'super_admin');
+    const approverUserId = req.body?.approver_user_id ? Number(req.body?.approver_user_id) : null;
+    const flowTemplateId = req.body?.flow_template_id ? Number(req.body.flow_template_id) : null;
+
+    await ensureManualTable(tableName);
+
+    if (!authUser || (authUser.roleKey !== 'super_admin' && authUser.roleKey !== 'domain_admin')) {
+      return res.status(403).json(errorResponse('仅超管或域管理员可管理审批配置'));
+    }
+
+    if (approverRole !== 'super_admin' && approverRole !== 'domain_admin') {
+      return res.status(400).json(errorResponse('approver_role 仅支持 super_admin 或 domain_admin'));
+    }
+
+    if (approvalRequired === 1 && (!flowTemplateId || flowTemplateId <= 0)) {
+      return res.status(400).json(errorResponse('启用审批流时必须选择 flow_template_id'));
+    }
+
+    if (flowTemplateId && flowTemplateId > 0) {
+      const [tplRows]: any = await pool.query(
+        `SELECT id, domain, enabled
+         FROM approval_flow_template
+         WHERE id = ?
+         LIMIT 1`,
+        [flowTemplateId]
+      );
+      if (!tplRows.length || Number(tplRows[0].enabled || 0) !== 1) {
+        return res.status(400).json(errorResponse('审批流模板不存在或未启用'));
+      }
+
+      if (domain && tplRows[0].domain && String(tplRows[0].domain) !== domain) {
+        return res.status(400).json(errorResponse('审批流模板域与表配置域不一致'));
+      }
+    }
+
+    if (authUser.roleKey === 'domain_admin') {
+      const [domainRows]: any = await pool.query('SELECT domain FROM sys_user_domain WHERE user_id = ?', [authUser.userId]);
+      const domains = domainRows.map((r: any) => String(r.domain));
+      if (!domain || !domains.includes(domain)) {
+        return res.status(403).json(errorResponse('域管理员仅可配置其负责域的数据表'));
+      }
+    }
+
+    await pool.query(
+      `INSERT INTO manual_table_approval_config (table_name, domain, approval_required, approver_role, approver_user_id, flow_template_id, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         domain = VALUES(domain),
+         approval_required = VALUES(approval_required),
+         approver_role = VALUES(approver_role),
+         approver_user_id = VALUES(approver_user_id),
+         flow_template_id = VALUES(flow_template_id),
+         updated_by = VALUES(updated_by)`,
+      [tableName, domain, approvalRequired, approverRole, approverUserId, flowTemplateId, Number(authUser.userId || 0)]
+    );
+
+    return res.json(successResponse(true, '审批配置已保存'));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message));
   }
 });
 
