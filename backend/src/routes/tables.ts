@@ -3,6 +3,7 @@ import pool from '../db';
 import { successResponse, errorResponse } from '../utils';
 
 const router = Router();
+const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
 
 const escapeCsvCell = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const CORE_TABLES = new Set([
@@ -26,8 +27,26 @@ const CORE_TABLES = new Set([
   'approval_instance',
   'approval_instance_node',
   'approval_instance_action',
+  'sys_user',
+  'sys_role',
+  'sys_user_role',
+  'sys_user_permission',
   'sys_user_domain',
 ]);
+
+function isBusinessTargetTable(tableName: string) {
+  if (!tableName) return false;
+  if (CORE_TABLES.has(tableName)) return false;
+  const lower = tableName.toLowerCase();
+  if (lower.startsWith('sys_')) return false;
+  if (lower.startsWith('approval_')) return false;
+  if (lower.startsWith('import_')) return false;
+  if (lower.startsWith('manual_')) return false;
+  if (lower.startsWith('validate_')) return false;
+  if (lower.startsWith('audit_')) return false;
+  if (lower.startsWith('async_')) return false;
+  return true;
+}
 
 async function ensureLifecycleTable() {
   await pool.query(
@@ -76,6 +95,14 @@ async function ensureApprovalConfigTable() {
 
 function isValidTableName(tableName: string) {
   return /^[a-zA-Z0-9_]+$/.test(tableName);
+}
+
+function isValidDbName(dbName: string) {
+  return /^[a-zA-Z0-9_]+$/.test(dbName);
+}
+
+function qTable(tableName: string) {
+  return `\`${TARGET_DB}\`.\`${tableName}\``;
 }
 
 function safeParseJson<T = any>(v: any): T | null {
@@ -312,6 +339,9 @@ async function loadTableActivities(tableName: string, query: any) {
 }
 
 async function ensureManualTable(tableName: string) {
+  if (!isValidDbName(TARGET_DB)) {
+    throw new Error('目标库名配置非法');
+  }
   if (!isValidTableName(tableName)) {
     throw new Error('表名格式不合法');
   }
@@ -322,8 +352,8 @@ async function ensureManualTable(tableName: string) {
   const [rows]: any = await pool.query(
     `SELECT TABLE_NAME
      FROM INFORMATION_SCHEMA.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
-    [tableName]
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+    [TARGET_DB, tableName]
   );
   if (!rows.length) {
     throw new Error('目标表不存在');
@@ -333,11 +363,23 @@ async function ensureManualTable(tableName: string) {
 // GET /api/tables - 获取所有可用目标表
 router.get('/', async (req: Request, res: Response) => {
   try {
+    if (!isValidDbName(TARGET_DB)) {
+      return res.status(500).json(errorResponse('目标库名配置非法'));
+    }
     const [tables]: any = await pool.query(
-      "SELECT TABLE_NAME, TABLE_COMMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
-      ['data_collection_platform']
+      `SELECT t.TABLE_NAME, t.TABLE_COMMENT
+       FROM INFORMATION_SCHEMA.TABLES t
+       WHERE t.TABLE_SCHEMA = ?
+         AND t.TABLE_NAME IN (
+           SELECT DISTINCT p.target_table
+           FROM import_plan p
+           WHERE p.target_table IS NOT NULL AND p.target_table <> ''
+         )
+       ORDER BY t.TABLE_NAME`,
+      [TARGET_DB]
     );
-    res.json(successResponse(tables));
+    const targetTables = (tables || []).filter((t: any) => isBusinessTargetTable(String(t.TABLE_NAME || '')));
+    res.json(successResponse(targetTables));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
   }
@@ -346,6 +388,9 @@ router.get('/', async (req: Request, res: Response) => {
 // GET /api/tables/manual/overview - 手工数据表监控总览
 router.get('/manual/overview', async (req: Request, res: Response) => {
   try {
+    if (!isValidDbName(TARGET_DB)) {
+      return res.status(500).json(errorResponse('目标库名配置非法'));
+    }
     await ensureLifecycleTable();
     await ensureApprovalConfigTable();
 
@@ -385,11 +430,18 @@ router.get('/manual/overview', async (req: Request, res: Response) => {
          ON ib1.target_table = ib2.target_table AND ib1.created_at = ib2.max_created_at
          WHERE ib1.is_valid = 1
        ) b ON b.target_table = t.TABLE_NAME
-       WHERE t.TABLE_SCHEMA = DATABASE()
+       WHERE t.TABLE_SCHEMA = ?
+         AND t.TABLE_NAME IN (
+           SELECT DISTINCT p.target_table
+           FROM import_plan p
+           WHERE p.target_table IS NOT NULL AND p.target_table <> ''
+         )
        ORDER BY (COALESCE(t.DATA_LENGTH, 0) + COALESCE(t.INDEX_LENGTH, 0)) DESC, t.TABLE_NAME ASC`
-    );
+    , [TARGET_DB]);
 
-    const tables = rows.filter((r: any) => !CORE_TABLES.has(r.TABLE_NAME)).map((r: any) => ({
+    const tables = rows
+      .filter((r: any) => isBusinessTargetTable(String(r.TABLE_NAME || '')))
+      .map((r: any) => ({
       table_name: r.TABLE_NAME,
       table_comment: r.TABLE_COMMENT,
       row_count: Number(r.row_count || 0),
@@ -657,10 +709,13 @@ router.put('/:tableName/lifecycle', async (req: Request, res: Response) => {
 router.delete('/:tableName', async (req: Request, res: Response) => {
   try {
     const { tableName } = req.params;
+    if (!isValidDbName(TARGET_DB)) {
+      return res.status(500).json(errorResponse('目标库名配置非法'));
+    }
     await ensureLifecycleTable();
     await ensureManualTable(tableName);
 
-    await pool.query(`DROP TABLE \`${tableName}\``);
+    await pool.query(`DROP TABLE ${qTable(tableName)}`);
     await pool.query('DELETE FROM manual_table_lifecycle WHERE table_name = ?', [tableName]);
     await pool.query('UPDATE import_batch SET is_valid = 0, is_latest = 0 WHERE target_table = ?', [tableName]);
 
@@ -681,9 +736,12 @@ router.get('/:tableName/columns', async (req: Request, res: Response) => {
     if (!isValidTableName(tableName)) {
       return res.status(400).json(errorResponse('表名格式不合法'));
     }
+    if (!isValidDbName(TARGET_DB)) {
+      return res.status(500).json(errorResponse('目标库名配置非法'));
+    }
     const [columns]: any = await pool.query(
       'SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
-      ['data_collection_platform', tableName]
+      [TARGET_DB, tableName]
     );
     res.json(successResponse(columns));
   } catch (err: any) {
@@ -698,13 +756,16 @@ router.get('/:tableName/template', async (req: Request, res: Response) => {
     if (!isValidTableName(tableName)) {
       return res.status(400).json(errorResponse('表名格式不合法'));
     }
+    if (!isValidDbName(TARGET_DB)) {
+      return res.status(500).json(errorResponse('目标库名配置非法'));
+    }
 
     const [columns]: any = await pool.query(
       `SELECT COLUMN_NAME, EXTRA
        FROM INFORMATION_SCHEMA.COLUMNS
        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
        ORDER BY ORDINAL_POSITION`,
-      ['data_collection_platform', tableName]
+      [TARGET_DB, tableName]
     );
 
     if (!columns.length) {
@@ -733,6 +794,9 @@ router.get('/:tableName/data', async (req: Request, res: Response) => {
     if (!isValidTableName(tableName)) {
       return res.status(400).json(errorResponse('表名格式不合法'));
     }
+    if (!isValidDbName(TARGET_DB)) {
+      return res.status(500).json(errorResponse('目标库名配置非法'));
+    }
     const { page = 1, pageSize = 20, batch_id } = req.query;
     const offset = (Number(page) - 1) * Number(pageSize);
 
@@ -741,11 +805,11 @@ router.get('/:tableName/data', async (req: Request, res: Response) => {
     if (batch_id) { where += ' AND batch_id = ?'; params.push(batch_id); }
 
     const [rows]: any = await pool.query(
-      `SELECT * FROM \`${tableName}\` ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM ${qTable(tableName)} ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
       [...params, Number(pageSize), offset]
     );
     const [countRows]: any = await pool.query(
-      `SELECT COUNT(*) as total FROM \`${tableName}\` ${where}`, params
+      `SELECT COUNT(*) as total FROM ${qTable(tableName)} ${where}`, params
     );
 
     res.json(successResponse({ rows, total: countRows[0].total }));
