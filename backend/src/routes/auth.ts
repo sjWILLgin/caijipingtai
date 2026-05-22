@@ -4,6 +4,7 @@ import pool from '../db';
 import { errorResponse, successResponse } from '../utils';
 import { authRequired, requireRole, signAuthToken } from '../middleware/auth';
 import { ANALYST_DEFAULT_PERMISSIONS, DOMAIN_ADMIN_DEFAULT_PERMISSIONS, isValidPermissionKey, PERMISSION_MATRIX, PermissionKey } from '../services/permissionMatrix';
+import { ensureDomainTable, syncDomainsFromData, validateDomainNames } from '../services/domainService';
 
 const router = Router();
 
@@ -204,6 +205,8 @@ router.get('/users', authRequired, requireRole('super_admin'), async (_req: Requ
 
 router.get('/users/:userId/domains', authRequired, requireRole('super_admin'), async (req: Request, res: Response) => {
   try {
+    await ensureDomainTable();
+    await syncDomainsFromData();
     const userId = Number(req.params.userId);
     if (!userId) {
       return res.status(400).json(errorResponse('用户ID无效'));
@@ -221,20 +224,26 @@ router.get('/users/:userId/domains', authRequired, requireRole('super_admin'), a
 
 router.put('/users/:userId/domains', authRequired, requireRole('super_admin'), async (req: Request, res: Response) => {
   try {
+    await ensureDomainTable();
     const userId = Number(req.params.userId);
     const rawDomains = Array.isArray(req.body?.domains) ? req.body.domains : [];
-    const domains = Array.from(new Set(rawDomains.map((d: any) => String(d).trim()).filter(Boolean)));
+    const domains: string[] = Array.from(new Set(rawDomains.map((d: any) => String(d).trim()).filter(Boolean)));
 
     if (!userId) {
       return res.status(400).json(errorResponse('用户ID无效'));
     }
 
+    const validDomains = await validateDomainNames(domains);
+    if (validDomains.length !== domains.length) {
+      return res.status(400).json(errorResponse('包含未在元仓启用的业务域，请先在数据维护中维护后再绑定'));
+    }
+
     await pool.query('DELETE FROM sys_user_domain WHERE user_id = ?', [userId]);
-    for (const domain of domains) {
+    for (const domain of validDomains) {
       await pool.query('INSERT INTO sys_user_domain (user_id, domain) VALUES (?, ?)', [userId, domain]);
     }
 
-    return res.json(successResponse(domains, '域绑定更新成功'));
+    return res.json(successResponse(validDomains, '域绑定更新成功'));
   } catch (err: any) {
     return res.status(500).json(errorResponse(err.message || '更新域绑定失败'));
   }

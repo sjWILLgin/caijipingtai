@@ -18,6 +18,7 @@ import P11UserAdmin from './pages/P11UserAdmin';
 import P12OperationCenter from './pages/P12OperationCenter';
 import P13ApprovalCenter from './pages/P13ApprovalCenter';
 import P14ApprovalFlowTemplates from './pages/P14ApprovalFlowTemplates';
+import P15DataMaintenance from './pages/P15DataMaintenance';
 import P99Auth from './pages/P99Auth';
 import { authApi } from './services/api';
 
@@ -122,6 +123,9 @@ const App: React.FC = () => {
                 ) : null}
                 {currentUser.role_key === 'super_admin' ? (
                   <Route path="approval-templates" element={<P14ApprovalFlowTemplates />} />
+                ) : null}
+                {currentUser.role_key === 'super_admin' ? (
+                  <Route path="data-maintenance/domains" element={<P15DataMaintenance />} />
                 ) : null}
               </Route>
               <Route path="/login" element={<Navigate to="/home" replace />} />

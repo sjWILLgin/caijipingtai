@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { approvalApi, tablesApi } from '../services/api';
+import { approvalApi, metaApi, tablesApi } from '../services/api';
 
 type Actor = {
   actor_type: 'USER' | 'ROLE' | 'DOMAIN_ADMIN';
@@ -58,6 +58,7 @@ const P14ApprovalFlowTemplates: React.FC = () => {
   const [editing, setEditing] = useState<TemplateRow | null>(null);
   const [approverUsers, setApproverUsers] = useState<ApproverUser[]>([]);
   const [targetTableOptions, setTargetTableOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [domainOptions, setDomainOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [form] = Form.useForm();
 
   const load = async () => {
@@ -80,6 +81,12 @@ const P14ApprovalFlowTemplates: React.FC = () => {
     tablesApi.list().then((res: any) => {
       const items = (res.data || []).map((t: any) => ({ label: t.TABLE_NAME, value: t.TABLE_NAME }));
       setTargetTableOptions(items);
+    }).catch(() => undefined);
+    metaApi.listDomains().then((rows: any[]) => {
+      const items = (rows || [])
+        .map((d: any) => ({ value: String(d.domain_name || ''), label: String(d.domain_name || '') }))
+        .filter((d: any) => !!d.value);
+      setDomainOptions(items);
     }).catch(() => undefined);
   }, []);
 
@@ -276,7 +283,7 @@ const P14ApprovalFlowTemplates: React.FC = () => {
               <Input placeholder="如：提交审批-会签版" />
             </Form.Item>
             <Form.Item name="domain" label="业务域（可选）" style={{ width: 220 }}>
-              <Input placeholder="留空表示通用" />
+              <Select allowClear showSearch options={domainOptions} placeholder="留空表示通用" optionFilterProp="label" />
             </Form.Item>
           </Space>
 

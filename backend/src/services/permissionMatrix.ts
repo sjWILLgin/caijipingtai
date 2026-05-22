@@ -15,7 +15,8 @@ export type PermissionKey =
   | 'dashboard.view'
   | 'audit.view'
   | 'user.manage'
-  | 'approval.manage';
+  | 'approval.manage'
+  | 'meta.manage';
 
 export const PERMISSION_MATRIX: Array<{ key: PermissionKey; label: string; module: string }> = [
   { key: 'plan.view', label: '查看导入方案', module: '导入方案' },
@@ -35,6 +36,7 @@ export const PERMISSION_MATRIX: Array<{ key: PermissionKey; label: string; modul
   { key: 'audit.view', label: '查看日志与作业状态', module: '审计' },
   { key: 'user.manage', label: '用户与权限管理', module: '系统管理' },
   { key: 'approval.manage', label: '审批流与审批处理', module: '系统管理' },
+  { key: 'meta.manage', label: '数据维护（业务域等主数据）', module: '系统管理' },
 ];
 
 export const ANALYST_DEFAULT_PERMISSIONS: PermissionKey[] = [

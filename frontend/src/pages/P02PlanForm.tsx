@@ -4,7 +4,7 @@ import {
   Alert, Button, Form, Input, Select, Radio, Card, Space, message, Typography, Divider, Row, Col, Switch, Tag
 } from 'antd';
 import { SaveOutlined, ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
-import { plansApi, tablesApi } from '../services/api';
+import { metaApi, plansApi, tablesApi } from '../services/api';
 
 const { Title } = Typography;
 const { TextArea } = Input;
@@ -57,6 +57,12 @@ const toActorLabel = (actors: any[]) => {
   return '由系统自动分配审批人';
 };
 
+const toRuleSourceLabel = (source?: string) => {
+  if (source === 'RULE_STATE') return '元仓规则状态表';
+  if (source === 'TEMPLATE_MATCH') return '元仓审批模板匹配';
+  return '未命中有效规则';
+};
+
 const P02PlanForm: React.FC = () => {
   const navigate = useNavigate();
   const { planId } = useParams<{ planId?: string }>();
@@ -64,7 +70,9 @@ const P02PlanForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tables, setTables] = useState<any[]>([]);
-  const [approvalRule, setApprovalRule] = useState<any>({ requireApproval: 0, templates: [] });
+  const [domainOptions, setDomainOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [approvalRule, setApprovalRule] = useState<any>({ requireApproval: 0, templates: [], source: 'NONE' });
+  const [approvalRuleError, setApprovalRuleError] = useState<string>('');
   const approvalRuleReqSeq = useRef(0);
   const isEdit = Boolean(planId);
   const selectedTargetTable = Form.useWatch('target_table', form);
@@ -74,7 +82,8 @@ const P02PlanForm: React.FC = () => {
     const tableName = String(targetTable || '').trim();
     const reqId = ++approvalRuleReqSeq.current;
     if (!tableName) {
-      setApprovalRule({ requireApproval: 0, templates: [] });
+      setApprovalRuleError('');
+      setApprovalRule({ requireApproval: 0, templates: [], source: 'NONE' });
       form.setFieldValue('require_approval', false);
       return;
     }
@@ -83,12 +92,12 @@ const P02PlanForm: React.FC = () => {
       if (reqId !== approvalRuleReqSeq.current) return;
       const data = res.data || {};
       const required = Number(data.requireApproval || 0) === 1;
-      setApprovalRule({ requireApproval: required ? 1 : 0, templates: data.templates || [] });
+      setApprovalRuleError('');
+      setApprovalRule({ requireApproval: required ? 1 : 0, templates: data.templates || [], source: data.source || 'NONE' });
       form.setFieldValue('require_approval', required);
-    } catch {
+    } catch (err: any) {
       if (reqId !== approvalRuleReqSeq.current) return;
-      setApprovalRule({ requireApproval: 0, templates: [] });
-      form.setFieldValue('require_approval', false);
+      setApprovalRuleError(String(err?.message || '审批规则查询失败'));
     }
   };
 
@@ -96,6 +105,10 @@ const P02PlanForm: React.FC = () => {
     tablesApi.list().then((res: any) => {
       setTables((res.data || []).map((t: any) => ({ value: t.TABLE_NAME, label: t.TABLE_NAME })));
     });
+    metaApi.listDomains().then((rows: any[]) => {
+      const options = (rows || []).map((d: any) => ({ value: String(d.domain_name || ''), label: String(d.domain_name || '') })).filter((d: any) => !!d.value);
+      setDomainOptions(options);
+    }).catch(() => undefined);
 
     if (isEdit && planId) {
       setLoading(true);
@@ -195,14 +208,7 @@ const P02PlanForm: React.FC = () => {
               <Form.Item name="domain" label="业务域" rules={[{ required: true, message: '请选择业务域' }]}>
                 <Select
                   placeholder="选择业务域"
-                  options={[
-                    { value: '销售数据域', label: '销售数据域' },
-                    { value: '渠道数据域', label: '渠道数据域' },
-                    { value: '产品数据域', label: '产品数据域' },
-                    { value: '供应链数据域', label: '供应链数据域' },
-                    { value: '消费者数据域', label: '消费者数据域' },
-                    { value: '市场主数据域', label: '市场主数据域' },
-                  ]}
+                  options={domainOptions}
                 />
               </Form.Item>
             </Col>
@@ -232,15 +238,17 @@ const P02PlanForm: React.FC = () => {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="target_table" label="目标表">
+              <Form.Item label="目标表">
                 <Space.Compact style={{ width: '100%' }}>
-                  <Select
-                    showSearch
-                    placeholder="选择目标表（单Sheet时配置）"
-                    options={tables}
-                    style={{ width: 'calc(100% - 110px)' }}
-                    filterOption={(input, opt) => (opt?.value as string)?.toLowerCase().includes(input.toLowerCase())}
-                  />
+                  <Form.Item name="target_table" noStyle>
+                    <Select
+                      showSearch
+                      placeholder="选择目标表（单Sheet时配置）"
+                      options={tables}
+                      style={{ width: 'calc(100% - 110px)' }}
+                      filterOption={(input, opt) => (opt?.value as string)?.toLowerCase().includes(input.toLowerCase())}
+                    />
+                  </Form.Item>
                   <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>
                     导出模板
                   </Button>
@@ -264,13 +272,22 @@ const P02PlanForm: React.FC = () => {
             </Col>
           </Row>
 
-          {approvalRule.requireApproval === 1 ? (
+          {approvalRuleError ? (
+            <Alert
+              showIcon
+              type="error"
+              style={{ marginTop: 8, marginBottom: 8 }}
+              message={`审批规则查询失败：${approvalRuleError}`}
+              description="请先确认登录状态与服务可用性，查询成功前不建议继续提交保存。"
+            />
+          ) : approvalRule.requireApproval === 1 ? (
             <Card size="small" style={{ marginTop: 8, marginBottom: 8 }}>
               <Space direction="vertical" style={{ width: '100%' }}>
                 <Alert
                   showIcon
                   type="warning"
                   message="当前目标表命中审批模板，导入方案已强制开启审批，不能手动关闭"
+                  description={<Tag color="gold">命中来源：{toRuleSourceLabel(approvalRule.source)}</Tag>}
                 />
                 {(approvalRule.templates || []).map((tpl: any) => (
                   <Card
@@ -303,6 +320,7 @@ const P02PlanForm: React.FC = () => {
               type="info"
               style={{ marginTop: 8, marginBottom: 8 }}
               message="当前目标表未命中任何审批模板，方案审批固定为否"
+              description={<Tag>判定来源：{toRuleSourceLabel(approvalRule.source)}</Tag>}
             />
           )}
 

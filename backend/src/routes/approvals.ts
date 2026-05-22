@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { errorResponse, successResponse } from '../utils';
 import { createApprovalTemplate, decideInstance, deleteApprovalTemplate, getApprovalTemplateDetail, getApprovalRuleByTable, getLatestByTask, hasApprovalInstanceById, listApprovalTemplates, listApprovalTemplatesWithNodes, listMyInstances, listPendingForUser, publishApprovalTemplate, updateApprovalTemplate } from '../services/approvalFlowService';
+import { ensureDomainTable, validateDomainNames } from '../services/domainService';
 
 const router = Router();
 
@@ -230,7 +231,15 @@ router.get('/templates/:id', async (req: Request, res: Response) => {
 
 router.post('/templates', async (req: Request, res: Response) => {
   try {
+    await ensureDomainTable();
     const authUser = (req as any).authUser as AuthUser;
+    const domain = String(req.body?.domain || '').trim();
+    if (domain) {
+      const validDomains = await validateDomainNames([domain]);
+      if (!validDomains.length) {
+        return res.status(400).json(errorResponse('业务域未在元仓启用，请先到数据维护中维护业务域'));
+      }
+    }
     const id = await createApprovalTemplate(authUser, req.body || {});
     return res.json(successResponse({ id }, '审批流模板创建成功'));
   } catch (err: any) {
@@ -240,9 +249,17 @@ router.post('/templates', async (req: Request, res: Response) => {
 
 router.put('/templates/:id', async (req: Request, res: Response) => {
   try {
+    await ensureDomainTable();
     const authUser = (req as any).authUser as AuthUser;
     const id = Number(req.params.id);
     if (!id) return res.status(400).json(errorResponse('模板ID无效'));
+    const domain = String(req.body?.domain || '').trim();
+    if (domain) {
+      const validDomains = await validateDomainNames([domain]);
+      if (!validDomains.length) {
+        return res.status(400).json(errorResponse('业务域未在元仓启用，请先到数据维护中维护业务域'));
+      }
+    }
     await updateApprovalTemplate(authUser, id, req.body || {});
     return res.json(successResponse(true, '审批流模板更新成功'));
   } catch (err: any) {

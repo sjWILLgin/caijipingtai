@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Table, Typography, Select, message, Space, Tag, Modal, Checkbox, Divider, Input, Popconfirm, Button } from 'antd';
-import { authApi } from '../services/api';
+import { authApi, metaApi } from '../services/api';
 
 type UserRow = {
   id: number;
@@ -35,6 +35,7 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
   const [domainModalOpen, setDomainModalOpen] = useState(false);
   const [domainTargetUser, setDomainTargetUser] = useState<UserRow | null>(null);
   const [domainValues, setDomainValues] = useState<string[]>([]);
+  const [domainOptions, setDomainOptions] = useState<Array<{ label: string; value: string }>>([]);
 
   const loadUsers = async () => {
     try {
@@ -51,6 +52,12 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
 
   useEffect(() => {
     loadUsers();
+    metaApi.listDomains().then((rows: any[]) => {
+      const items = (rows || [])
+        .map((d: any) => ({ value: String(d.domain_name || ''), label: String(d.domain_name || '') }))
+        .filter((d: any) => !!d.value);
+      setDomainOptions(items);
+    }).catch(() => undefined);
   }, []);
 
   const updateRole = async (userId: number, roleKey: 'super_admin' | 'domain_admin' | 'analyst') => {
@@ -333,15 +340,16 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
         okButtonProps={{ loading }}
       >
         <Typography.Paragraph type="secondary">
-          输入并回车可新增域。域管理员仅可处理其绑定域内的审批。
+          仅可选择已在“数据维护-业务域维护”中启用的业务域。域管理员仅可处理其绑定域内的审批。
         </Typography.Paragraph>
         <Select
-          mode="tags"
+          mode="multiple"
           style={{ width: '100%' }}
+          options={domainOptions}
           value={domainValues}
           onChange={(vals) => setDomainValues((vals || []).map((v) => String(v).trim()).filter(Boolean))}
-          placeholder="例如：销售域、供应链域"
-          tokenSeparators={[',', '，', ' ']}
+          optionFilterProp="label"
+          placeholder="请选择业务域"
         />
       </Modal>
     </Card>

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Card, DatePicker, Drawer, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { DeleteOutlined, FileSearchOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
-import { approvalApi, tablesApi } from '../services/api';
+import { approvalApi, metaApi, tablesApi } from '../services/api';
 
 const { Title, Text } = Typography;
 
@@ -108,6 +108,7 @@ const P10ManualTables: React.FC = () => {
   const [approvalTable, setApprovalTable] = useState<ManualTableRow | null>(null);
   const [approvalForm] = Form.useForm();
   const [flowTemplateOptions, setFlowTemplateOptions] = useState<FlowTemplateOption[]>([]);
+  const [domainOptions, setDomainOptions] = useState<Array<{ value: string; label: string }>>([]);
 
   const totalRows = useMemo(() => rows.reduce((acc, it) => acc + (it.row_count || 0), 0), [rows]);
   const totalSizeMb = useMemo(() => rows.reduce((acc, it) => acc + (it.size_mb || 0), 0), [rows]);
@@ -127,6 +128,12 @@ const P10ManualTables: React.FC = () => {
   useEffect(() => {
     fetchRows();
     setFlowTemplateOptions([]);
+    metaApi.listDomains().then((rows: any[]) => {
+      const options = (rows || [])
+        .map((d: any) => ({ value: String(d.domain_name || ''), label: String(d.domain_name || '') }))
+        .filter((d: any) => !!d.value);
+      setDomainOptions(options);
+    }).catch(() => undefined);
   }, []);
 
   const openApprovalModal = async (record: ManualTableRow) => {
@@ -615,8 +622,13 @@ const P10ManualTables: React.FC = () => {
         confirmLoading={savingApproval}
       >
         <Form form={approvalForm} layout="vertical">
-          <Form.Item name="domain" label="所属业务域" rules={[{ required: true, message: '请输入业务域' }]}>
-            <Input placeholder="例如：销售数据域" />
+          <Form.Item name="domain" label="所属业务域" rules={[{ required: true, message: '请选择业务域' }]}> 
+            <Select
+              showSearch
+              options={domainOptions}
+              placeholder="请选择业务域"
+              optionFilterProp="label"
+            />
           </Form.Item>
           <Form.Item name="approval_required" label="是否强制审批">
             <Select

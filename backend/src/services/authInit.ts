@@ -1,8 +1,11 @@
 import pool from '../db';
 import bcrypt from 'bcryptjs';
 import { ANALYST_DEFAULT_PERMISSIONS } from './permissionMatrix';
+import { ensureDomainTable } from './domainService';
 
 export async function initAuthTables() {
+  await ensureDomainTable();
+
   await pool.query(
     `CREATE TABLE IF NOT EXISTS sys_user (
       id INT PRIMARY KEY AUTO_INCREMENT,

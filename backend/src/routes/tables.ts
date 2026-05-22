@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { successResponse, errorResponse } from '../utils';
 import { getApprovalRuleStateByTable, syncApprovalRuleStateForTable } from '../services/approvalRuleStateService';
+import { ensureDomainTable, validateDomainNames } from '../services/domainService';
 
 const router = Router();
 const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
@@ -33,6 +34,7 @@ const CORE_TABLES = new Set([
   'sys_user_role',
   'sys_user_permission',
   'sys_user_domain',
+  'rollback_verify_table',
 ]);
 
 function isBusinessTargetTable(tableName: string) {
@@ -46,6 +48,7 @@ function isBusinessTargetTable(tableName: string) {
   if (lower.startsWith('validate_')) return false;
   if (lower.startsWith('audit_')) return false;
   if (lower.startsWith('async_')) return false;
+  if (lower.startsWith('rollback_')) return false;
   return true;
 }
 
@@ -371,11 +374,6 @@ router.get('/', async (req: Request, res: Response) => {
       `SELECT t.TABLE_NAME, t.TABLE_COMMENT
        FROM INFORMATION_SCHEMA.TABLES t
        WHERE t.TABLE_SCHEMA = ?
-         AND t.TABLE_NAME IN (
-           SELECT DISTINCT p.target_table
-           FROM import_plan p
-           WHERE p.target_table IS NOT NULL AND p.target_table <> ''
-         )
        ORDER BY t.TABLE_NAME`,
       [TARGET_DB]
     );
@@ -432,11 +430,6 @@ router.get('/manual/overview', async (req: Request, res: Response) => {
          WHERE ib1.is_valid = 1
        ) b ON b.target_table = t.TABLE_NAME
        WHERE t.TABLE_SCHEMA = ?
-         AND t.TABLE_NAME IN (
-           SELECT DISTINCT p.target_table
-           FROM import_plan p
-           WHERE p.target_table IS NOT NULL AND p.target_table <> ''
-         )
        ORDER BY (COALESCE(t.DATA_LENGTH, 0) + COALESCE(t.INDEX_LENGTH, 0)) DESC, t.TABLE_NAME ASC`
     , [TARGET_DB]);
 
@@ -535,6 +528,7 @@ router.get('/:tableName/rule-state', async (req: Request, res: Response) => {
 
 router.put('/:tableName/approval-config', async (req: Request, res: Response) => {
   try {
+    await ensureDomainTable();
     await ensureApprovalConfigTable();
     const authUser = (req as any).authUser;
     const tableName = String(req.params.tableName || '').trim();
@@ -549,6 +543,11 @@ router.put('/:tableName/approval-config', async (req: Request, res: Response) =>
 
     if (!authUser || (authUser.roleKey !== 'super_admin' && authUser.roleKey !== 'domain_admin')) {
       return res.status(403).json(errorResponse('仅超管或域管理员可管理审批配置'));
+    }
+
+    const validDomains = await validateDomainNames([domain]);
+    if (!validDomains.length) {
+      return res.status(400).json(errorResponse('业务域未在元仓启用，请先到数据维护中维护业务域'));
     }
 
     if (approverRole !== 'super_admin' && approverRole !== 'domain_admin') {

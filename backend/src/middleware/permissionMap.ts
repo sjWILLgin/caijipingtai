@@ -61,6 +61,9 @@ const RULES: Rule[] = [
   { method: 'DELETE', path: /^\/approvals\/templates\/[^/]+$/, permission: 'approval.manage' },
   { method: 'GET', path: /^\/approvals\/task\/[^/]+\/latest$/, permission: 'task.view' },
   { method: 'POST', path: /^\/approvals\/[^/]+\/(approve|reject)$/, permission: 'approval.manage' },
+
+  { method: 'POST', path: /^\/meta\/domains$/, permission: 'meta.manage' },
+  { method: 'PUT', path: /^\/meta\/domains\/[^/]+$/, permission: 'meta.manage' },
 ];
 
 function findPermission(method: string, path: string) {

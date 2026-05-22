@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { generatePlanId, generateRuleId, successResponse, errorResponse } from '../utils';
-import { getApprovalRuleByTable, getApprovalTemplateDetail } from '../services/approvalFlowService';
-import { getApprovalRuleStateByTable } from '../services/approvalRuleStateService';
+import { resolveApprovalRuleFromMeta } from '../services/approvalRuleResolverService';
+import { ensureDomainTable, validateDomainNames } from '../services/domainService';
 
 const router = Router();
 
@@ -19,64 +19,11 @@ const parseJsonField = (value: any, fallback: any) => {
 };
 
 async function resolvePlanApprovalRequirement(targetTable: string, domain: string) {
-  const tableName = String(targetTable || '').trim();
-  if (!tableName || !/^[a-zA-Z0-9_]+$/.test(tableName)) {
-    return { requireApproval: 0, matchedTemplateId: null, templates: [] as any[] };
-  }
-
-  // 优先读取元仓规则状态表：选择目标表时先看当前规则是否仍生效。
-  const state = await getApprovalRuleStateByTable(tableName);
-  if (state && Number(state.approval_required_effective || 0) === 1) {
-    const templateId = state.flow_template_id ? Number(state.flow_template_id) : null;
-    if (templateId) {
-      const detail = await getApprovalTemplateDetail(templateId);
-      if (detail && Number(detail.enabled || 0) === 1) {
-        return {
-          requireApproval: 1,
-          matchedTemplateId: templateId,
-          templates: [detail],
-        };
-      }
-    }
-    return { requireApproval: 1, matchedTemplateId: null, templates: [] as any[] };
-  }
-
-  // 优先走表级配置：只要该表被配置为强制审批，导入方案必须强制审批。
-  const [cfgRows]: any = await pool.query(
-    `SELECT approval_required, flow_template_id
-     FROM manual_table_approval_config
-     WHERE table_name = ?
-     LIMIT 1`,
-    [tableName]
-  );
-  const cfg = cfgRows[0] || null;
-  if (cfg && Number(cfg.approval_required || 0) === 1) {
-    const templateId = cfg.flow_template_id ? Number(cfg.flow_template_id) : null;
-    if (templateId) {
-      const detail = await getApprovalTemplateDetail(templateId);
-      if (!detail || Number(detail.enabled || 0) !== 1) {
-        return { requireApproval: 0, matchedTemplateId: null, templates: [] as any[] };
-      }
-      return {
-        requireApproval: 1,
-        matchedTemplateId: templateId,
-        templates: detail ? [detail] : [],
-      };
-    }
-    return { requireApproval: 1, matchedTemplateId: null, templates: [] as any[] };
-  }
-
-  // 若未配置表级强制审批，再按模板目标表+域匹配规则判断。
-  const rule = await getApprovalRuleByTable({
-    targetTable: tableName,
-    domain: String(domain || '').trim() || null,
+  return resolveApprovalRuleFromMeta({
+    targetTable,
+    domain,
     withNodes: true,
   });
-  return {
-    requireApproval: Number(rule.approval_required || 0),
-    matchedTemplateId: rule.matched_template_id ? Number(rule.matched_template_id) : null,
-    templates: rule.templates || [],
-  };
 }
 
 router.get('/approval-rule', async (req: Request, res: Response) => {
@@ -128,6 +75,12 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const { plan_name, domain, data_subject, file_types, sheet_strategy, write_modes, mapping_strategy, target_table, require_approval, description, owner_id, status } = req.body;
     if (!plan_name) return res.status(400).json(errorResponse('方案名称不能为空'));
+
+    await ensureDomainTable();
+    const validDomains = await validateDomainNames([String(domain || '').trim()]);
+    if (!validDomains.length) {
+      return res.status(400).json(errorResponse('业务域未在元仓启用，请先到数据维护中维护业务域'));
+    }
 
     const approvalRule = await resolvePlanApprovalRequirement(String(target_table || ''), String(domain || ''));
     const finalRequireApproval = approvalRule.requireApproval;
@@ -204,6 +157,13 @@ router.put('/:planId', async (req: Request, res: Response) => {
     const { plan_name, domain, data_subject, file_types, sheet_strategy, write_modes, mapping_strategy, target_table, description, status } = req.body;
     const finalDomain = domain || current.domain;
     const finalTargetTable = target_table || current.target_table;
+
+    await ensureDomainTable();
+    const validDomains = await validateDomainNames([String(finalDomain || '').trim()]);
+    if (!validDomains.length) {
+      return res.status(400).json(errorResponse('业务域未在元仓启用，请先到数据维护中维护业务域'));
+    }
+
     const approvalRule = await resolvePlanApprovalRequirement(String(finalTargetTable || ''), String(finalDomain || ''));
 
     await pool.query(

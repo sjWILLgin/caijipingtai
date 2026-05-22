@@ -32,6 +32,7 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     if (location.pathname.startsWith('/ops-center')) return 'ops-center';
     if (location.pathname.startsWith('/approval-center')) return 'approval-center';
     if (location.pathname.startsWith('/approval-templates')) return 'approval-templates';
+    if (location.pathname.startsWith('/data-maintenance/domains')) return 'data-maintenance-domains';
     return 'home';
   };
 
@@ -53,6 +54,7 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     if (p === '/ops-center') return [{ title: '系统管理' }, { title: '信息中心' }];
     if (p === '/approval-center') return [{ title: '系统管理' }, { title: '审批中心' }];
     if (p === '/approval-templates') return [{ title: '系统管理' }, { title: '审批流模板' }];
+    if (p === '/data-maintenance/domains') return [{ title: '系统管理' }, { title: '数据维护' }, { title: '业务域维护' }];
     return [{ title: '导入方案' }];
   };
 
@@ -199,6 +201,23 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
                       icon: <FileTextOutlined />,
                       label: '审批流模板',
                       onClick: () => navigate('/approval-templates'),
+                    },
+                    {
+                      key: 'data-maintenance',
+                      icon: <DatabaseOutlined />,
+                      label: '数据维护',
+                      children: [
+                        {
+                          key: 'data-maintenance-domains',
+                          label: '业务域维护',
+                          onClick: () => navigate('/data-maintenance/domains'),
+                        },
+                        {
+                          key: 'data-maintenance-placeholder',
+                          label: '预留能力位',
+                          disabled: true,
+                        },
+                      ],
                     },
                   ]
                 : []),

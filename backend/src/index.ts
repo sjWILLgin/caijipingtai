@@ -14,6 +14,7 @@ import tablesRouter from './routes/tables';
 import jobsRouter from './routes/jobs';
 import dashboardRouter from './routes/dashboard';
 import approvalsRouter from './routes/approvals';
+import metaRouter from './routes/meta';
 import { initJobQueue } from './services/jobQueue';
 import { initAuthTables } from './services/authInit';
 import { initApprovalTables } from './services/approvalInit';
@@ -55,6 +56,7 @@ app.use('/api/tables', tablesRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/approvals', approvalsRouter);
+app.use('/api/meta', metaRouter);
 
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

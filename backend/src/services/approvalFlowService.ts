@@ -624,7 +624,6 @@ export async function matchApprovalTemplatesByTable(params: {
   enabledOnly?: boolean;
 }) {
   const targetTable = String(params.targetTable || '').trim().toLowerCase();
-  const domain = String(params.domain || '').trim();
   if (!targetTable || !/^[a-zA-Z0-9_]+$/.test(targetTable)) {
     return [];
   }
@@ -665,16 +664,9 @@ export async function matchApprovalTemplatesByTable(params: {
   const matched = rawTemplates
     .filter((t: any) => {
       const hitTable = t.target_tables.includes(targetTable);
-      if (!hitTable) return false;
-      if (!t.domain) return true;
-      return !!domain && t.domain === domain;
+      return hitTable;
     })
-    .sort((a: any, b: any) => {
-      const aExact = a.domain && a.domain === domain ? 1 : 0;
-      const bExact = b.domain && b.domain === domain ? 1 : 0;
-      if (aExact !== bExact) return bExact - aExact;
-      return a.id - b.id;
-    });
+    .sort((a: any, b: any) => a.id - b.id);
 
   if (!params.withNodes) return matched;
 

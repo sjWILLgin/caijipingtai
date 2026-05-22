@@ -172,6 +172,19 @@ export const approvalApi = {
   reject: (id: number, comment?: string) => api.post(`/approvals/${id}/reject`, { comment }),
 };
 
+export const metaApi = {
+  listDomains: (includeInactive = false) =>
+    api
+      .get('/meta/domains', { params: includeInactive ? { include_inactive: 1 } : undefined })
+      .then((res: any) => res.data),
+  createDomain: (data: { domain_name: string; is_active?: number; sort_order?: number; remark?: string }) =>
+    api.post('/meta/domains', data).then((res: any) => res.data),
+  updateDomain: (
+    id: number,
+    data: { domain_name?: string; is_active?: number; sort_order?: number; remark?: string }
+  ) => api.put(`/meta/domains/${id}`, data).then((res: any) => res.data),
+};
+
 // Dashboard API
 export const dashboardApi = {
   getStats: () => api.get('/dashboard/stats').then((res: any) => res.data),
