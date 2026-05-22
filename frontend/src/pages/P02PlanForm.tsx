@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Alert, Button, Form, Input, Select, Radio, Card, Space, message, Typography, Divider, Row, Col, Switch, Tag
@@ -65,12 +65,14 @@ const P02PlanForm: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [tables, setTables] = useState<any[]>([]);
   const [approvalRule, setApprovalRule] = useState<any>({ requireApproval: 0, templates: [] });
+  const approvalRuleReqSeq = useRef(0);
   const isEdit = Boolean(planId);
   const selectedTargetTable = Form.useWatch('target_table', form);
   const selectedDomain = Form.useWatch('domain', form);
 
   const fetchApprovalRule = async (targetTable?: string, domain?: string) => {
     const tableName = String(targetTable || '').trim();
+    const reqId = ++approvalRuleReqSeq.current;
     if (!tableName) {
       setApprovalRule({ requireApproval: 0, templates: [] });
       form.setFieldValue('require_approval', false);
@@ -78,11 +80,13 @@ const P02PlanForm: React.FC = () => {
     }
     try {
       const res: any = await plansApi.approvalRule(tableName, domain);
+      if (reqId !== approvalRuleReqSeq.current) return;
       const data = res.data || {};
       const required = Number(data.requireApproval || 0) === 1;
       setApprovalRule({ requireApproval: required ? 1 : 0, templates: data.templates || [] });
       form.setFieldValue('require_approval', required);
     } catch {
+      if (reqId !== approvalRuleReqSeq.current) return;
       setApprovalRule({ requireApproval: 0, templates: [] });
       form.setFieldValue('require_approval', false);
     }
@@ -179,20 +183,7 @@ const P02PlanForm: React.FC = () => {
       </div>
 
       <Card loading={loading}>
-        <Form
-          form={form}
-          layout="vertical"
-          onValuesChange={(_, allValues) => {
-            const tableName = allValues?.target_table;
-            const domain = allValues?.domain;
-            if (tableName) {
-              fetchApprovalRule(tableName, domain);
-            } else {
-              setApprovalRule({ requireApproval: 0, templates: [] });
-              form.setFieldValue('require_approval', false);
-            }
-          }}
-        >
+        <Form form={form} layout="vertical">
           <Title level={5}>基本信息</Title>
           <Row gutter={16}>
             <Col span={8}>
@@ -204,10 +195,6 @@ const P02PlanForm: React.FC = () => {
               <Form.Item name="domain" label="业务域" rules={[{ required: true, message: '请选择业务域' }]}>
                 <Select
                   placeholder="选择业务域"
-                  onChange={(v) => {
-                    const tableName = form.getFieldValue('target_table');
-                    if (tableName) fetchApprovalRule(String(tableName), String(v || ''));
-                  }}
                   options={[
                     { value: '销售数据域', label: '销售数据域' },
                     { value: '渠道数据域', label: '渠道数据域' },
@@ -251,9 +238,6 @@ const P02PlanForm: React.FC = () => {
                     showSearch
                     placeholder="选择目标表（单Sheet时配置）"
                     options={tables}
-                    onChange={(v) => {
-                      fetchApprovalRule(String(v || ''), String(form.getFieldValue('domain') || ''));
-                    }}
                     style={{ width: 'calc(100% - 110px)' }}
                     filterOption={(input, opt) => (opt?.value as string)?.toLowerCase().includes(input.toLowerCase())}
                   />
