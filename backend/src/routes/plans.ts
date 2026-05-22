@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { generatePlanId, generateRuleId, successResponse, errorResponse } from '../utils';
-import { getApprovalRuleByTable } from '../services/approvalFlowService';
+import { getApprovalRuleByTable, getApprovalTemplateDetail } from '../services/approvalFlowService';
 
 const router = Router();
 
@@ -22,6 +22,30 @@ async function resolvePlanApprovalRequirement(targetTable: string, domain: strin
   if (!tableName || !/^[a-zA-Z0-9_]+$/.test(tableName)) {
     return { requireApproval: 0, matchedTemplateId: null, templates: [] as any[] };
   }
+
+  // 优先走表级配置：只要该表被配置为强制审批，导入方案必须强制审批。
+  const [cfgRows]: any = await pool.query(
+    `SELECT approval_required, flow_template_id
+     FROM manual_table_approval_config
+     WHERE table_name = ?
+     LIMIT 1`,
+    [tableName]
+  );
+  const cfg = cfgRows[0] || null;
+  if (cfg && Number(cfg.approval_required || 0) === 1) {
+    const templateId = cfg.flow_template_id ? Number(cfg.flow_template_id) : null;
+    if (templateId) {
+      const detail = await getApprovalTemplateDetail(templateId);
+      return {
+        requireApproval: 1,
+        matchedTemplateId: templateId,
+        templates: detail ? [detail] : [],
+      };
+    }
+    return { requireApproval: 1, matchedTemplateId: null, templates: [] as any[] };
+  }
+
+  // 若未配置表级强制审批，再按模板目标表+域匹配规则判断。
   const rule = await getApprovalRuleByTable({
     targetTable: tableName,
     domain: String(domain || '').trim() || null,
