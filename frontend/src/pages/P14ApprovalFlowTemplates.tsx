@@ -165,6 +165,16 @@ const P14ApprovalFlowTemplates: React.FC = () => {
     }
   };
 
+  const removeTemplate = async (row: TemplateRow) => {
+    try {
+      await approvalApi.deleteTemplate(row.id);
+      message.success('审批流模板已删除');
+      await load();
+    } catch (err: any) {
+      message.error(err.message || '删除审批流模板失败');
+    }
+  };
+
   return (
     <Card>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -213,6 +223,16 @@ const P14ApprovalFlowTemplates: React.FC = () => {
                 ) : (
                   <Button size="small" type="primary" ghost onClick={() => switchPublish(r, true)}>启用</Button>
                 )}
+                <Popconfirm
+                  title="确认删除该模板？"
+                  description="删除后不可恢复，且会自动解除已绑定表的审批模板。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => removeTemplate(r)}
+                >
+                  <Button size="small" danger>删除</Button>
+                </Popconfirm>
               </Space>
             ),
           },

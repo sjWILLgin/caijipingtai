@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
 import { errorResponse, successResponse } from '../utils';
-import { createApprovalTemplate, decideInstance, getApprovalTemplateDetail, getApprovalRuleByTable, getLatestByTask, hasApprovalInstanceById, listApprovalTemplates, listApprovalTemplatesWithNodes, listMyInstances, listPendingForUser, publishApprovalTemplate, updateApprovalTemplate } from '../services/approvalFlowService';
+import { createApprovalTemplate, decideInstance, deleteApprovalTemplate, getApprovalTemplateDetail, getApprovalRuleByTable, getLatestByTask, hasApprovalInstanceById, listApprovalTemplates, listApprovalTemplatesWithNodes, listMyInstances, listPendingForUser, publishApprovalTemplate, updateApprovalTemplate } from '../services/approvalFlowService';
 
 const router = Router();
 
@@ -260,6 +260,18 @@ router.post('/templates/:id/publish', async (req: Request, res: Response) => {
     return res.json(successResponse(true, enabled ? '审批流模板已启用' : '审批流模板已停用'));
   } catch (err: any) {
     return res.status(400).json(errorResponse(err.message || '审批流模板发布失败'));
+  }
+});
+
+router.delete('/templates/:id', async (req: Request, res: Response) => {
+  try {
+    const authUser = (req as any).authUser as AuthUser;
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json(errorResponse('模板ID无效'));
+    await deleteApprovalTemplate(authUser, id);
+    return res.json(successResponse(true, '审批流模板已删除'));
+  } catch (err: any) {
+    return res.status(400).json(errorResponse(err.message || '审批流模板删除失败'));
   }
 });
 

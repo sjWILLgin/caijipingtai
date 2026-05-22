@@ -57,6 +57,7 @@ const RULES: Rule[] = [
   { method: 'POST', path: /^\/approvals\/templates$/, permission: 'approval.manage' },
   { method: 'PUT', path: /^\/approvals\/templates\/[^/]+$/, permission: 'approval.manage' },
   { method: 'POST', path: /^\/approvals\/templates\/[^/]+\/publish$/, permission: 'approval.manage' },
+  { method: 'DELETE', path: /^\/approvals\/templates\/[^/]+$/, permission: 'approval.manage' },
   { method: 'GET', path: /^\/approvals\/task\/[^/]+\/latest$/, permission: 'task.view' },
   { method: 'POST', path: /^\/approvals\/[^/]+\/(approve|reject)$/, permission: 'approval.manage' },
 ];

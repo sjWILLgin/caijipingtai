@@ -166,6 +166,7 @@ export const approvalApi = {
   createTemplate: (data: any) => api.post('/approvals/templates', data).then((res: any) => res.data),
   updateTemplate: (id: number, data: any) => api.put(`/approvals/templates/${id}`, data).then((res: any) => res.data),
   publishTemplate: (id: number, enabled: boolean) => api.post(`/approvals/templates/${id}/publish`, { enabled }).then((res: any) => res.data),
+  deleteTemplate: (id: number) => api.delete(`/approvals/templates/${id}`).then((res: any) => res.data),
   latestByTask: (taskId: string) => api.get(`/approvals/task/${taskId}/latest`).then((res: any) => res.data),
   approve: (id: number, comment?: string) => api.post(`/approvals/${id}/approve`, { comment }),
   reject: (id: number, comment?: string) => api.post(`/approvals/${id}/reject`, { comment }),
