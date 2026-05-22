@@ -427,7 +427,38 @@ export async function publishApprovalTemplate(authUser: AuthUser, templateId: nu
   if (authUser.roleKey !== 'super_admin') {
     throw new Error('仅超级管理员可发布审批流模板');
   }
-  await pool.query('UPDATE approval_flow_template SET enabled = ?, updated_at = NOW() WHERE id = ?', [enabled ? 1 : 0, templateId]);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows]: any = await conn.query('SELECT id FROM approval_flow_template WHERE id = ? LIMIT 1 FOR UPDATE', [templateId]);
+    if (!rows.length) {
+      throw new Error('审批流模板不存在');
+    }
+
+    const finalEnabled = enabled ? 1 : 0;
+    await conn.query('UPDATE approval_flow_template SET enabled = ?, updated_at = NOW() WHERE id = ?', [finalEnabled, templateId]);
+
+    // 模板停用时，自动解除与手工数据表的强制审批绑定，避免继续命中审批。
+    if (finalEnabled === 0) {
+      await conn.query(
+        `UPDATE manual_table_approval_config
+         SET approval_required = 0,
+             flow_template_id = NULL,
+             updated_at = NOW()
+         WHERE flow_template_id = ?`,
+        [templateId]
+      );
+    }
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 export async function deleteApprovalTemplate(authUser: AuthUser, templateId: number) {

@@ -36,6 +36,9 @@ async function resolvePlanApprovalRequirement(targetTable: string, domain: strin
     const templateId = cfg.flow_template_id ? Number(cfg.flow_template_id) : null;
     if (templateId) {
       const detail = await getApprovalTemplateDetail(templateId);
+      if (!detail || Number(detail.enabled || 0) !== 1) {
+        return { requireApproval: 0, matchedTemplateId: null, templates: [] as any[] };
+      }
       return {
         requireApproval: 1,
         matchedTemplateId: templateId,
