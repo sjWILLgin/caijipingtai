@@ -14,6 +14,10 @@ import tablesRouter from './routes/tables';
 import jobsRouter from './routes/jobs';
 import dashboardRouter from './routes/dashboard';
 import { initJobQueue } from './services/jobQueue';
+import { initAuthTables } from './services/authInit';
+import authRouter from './routes/auth';
+import { authRequired } from './middleware/auth';
+import { permissionGuard } from './middleware/permissionMap';
 
 dotenv.config();
 
@@ -27,7 +31,16 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Static file serving for uploads
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+app.use('/api/auth', authRouter);
+
 // API Routes
+app.use('/api', authRequired);
+app.use('/api', permissionGuard);
 app.use('/api/import-plans', plansRouter);
 app.use('/api/import-tasks', tasksRouter);
 app.use('/api/import-files', filesRouter);
@@ -40,20 +53,15 @@ app.use('/api/tables', tablesRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/dashboard', dashboardRouter);
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
-});
-
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(err.stack);
   res.status(500).json({ success: false, message: err.message || '系统异常，请稍后重试' });
 });
 
-initJobQueue()
+Promise.all([initJobQueue(), initAuthTables()])
   .catch((e) => {
-    console.error('初始化任务队列失败:', e.message);
+    console.error('初始化系统组件失败:', e.message);
   })
   .finally(() => {
     app.listen(PORT, () => {

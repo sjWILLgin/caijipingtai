@@ -1,19 +1,34 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag } from 'antd';
-import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined } from '@ant-design/icons';
+import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag, Button, Space, Modal, Form, Input, message } from 'antd';
+import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined, UserOutlined } from '@ant-design/icons';
+import { authApi } from '../services/api';
 
 const { Header, Sider, Content } = AntLayout;
 
-const Layout: React.FC = () => {
+type Props = {
+  currentUser: {
+    id: number;
+    username: string;
+    display_name: string;
+    role_key: 'super_admin' | 'analyst';
+  };
+  onLogout: () => void;
+};
+
+const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [pwdOpen, setPwdOpen] = useState(false);
+  const [pwdLoading, setPwdLoading] = useState(false);
+  const [pwdForm] = Form.useForm();
 
   const getSelectedKey = () => {
     if (location.pathname === '/home' || location.pathname === '/') return 'home';
     if (location.pathname.startsWith('/import-plans')) return 'plans';
     if (location.pathname.startsWith('/import-tasks')) return 'tasks';
     if (location.pathname.startsWith('/manual-tables')) return 'manual-tables';
+    if (location.pathname.startsWith('/user-admin')) return 'user-admin';
     return 'home';
   };
 
@@ -31,6 +46,7 @@ const Layout: React.FC = () => {
     if (p.includes('/commit-confirm')) return [{ title: '任务记录' }, { title: '提交确认' }];
     if (/\/import-tasks\/[^/]+$/.test(p)) return [{ title: '任务记录' }, { title: '任务详情' }];
     if (p === '/manual-tables') return [{ title: '运维监控' }, { title: '手工数据表清单' }];
+    if (p === '/user-admin') return [{ title: '系统管理' }, { title: '用户权限' }];
     return [{ title: '导入方案' }];
   };
 
@@ -47,6 +63,22 @@ const Layout: React.FC = () => {
 
   const currentTaskStep = getTaskStep();
 
+  const handleChangePassword = async () => {
+    try {
+      const values = await pwdForm.validateFields();
+      setPwdLoading(true);
+      await authApi.changePassword({ old_password: values.old_password, new_password: values.new_password });
+      message.success('密码修改成功，请使用新密码登录');
+      pwdForm.resetFields();
+      setPwdOpen(false);
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(err.message || '修改密码失败');
+    } finally {
+      setPwdLoading(false);
+    }
+  };
+
   return (
     <AntLayout style={{ minHeight: '100vh' }}>
       <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', background: '#0f172a' }}>
@@ -59,7 +91,15 @@ const Layout: React.FC = () => {
           data_collection_platform
         </Typography.Text>
         </div>
-        <Tag color="blue">本地环境</Tag>
+        <Space>
+          <Tag color="blue">本地环境</Tag>
+          <Tag color={currentUser.role_key === 'super_admin' ? 'gold' : 'geekblue'}>
+            {currentUser.role_key === 'super_admin' ? '超级管理员' : '分析师'}
+          </Tag>
+          <Typography.Text style={{ color: '#cbd5e1' }}>{currentUser.display_name}</Typography.Text>
+          <Button size="small" onClick={() => setPwdOpen(true)}>修改密码</Button>
+          <Button size="small" onClick={onLogout}>退出登录</Button>
+        </Space>
       </Header>
       <AntLayout>
         <Sider width={200} style={{ background: '#fff', borderRight: '1px solid #f0f0f0' }}>
@@ -92,6 +132,16 @@ const Layout: React.FC = () => {
                 label: '手工数据表',
                 onClick: () => navigate('/manual-tables'),
               },
+              ...(currentUser.role_key === 'super_admin'
+                ? [
+                    {
+                      key: 'user-admin',
+                      icon: <UserOutlined />,
+                      label: '用户权限',
+                      onClick: () => navigate('/user-admin'),
+                    },
+                  ]
+                : []),
             ]}
           />
         </Sider>
@@ -118,6 +168,45 @@ const Layout: React.FC = () => {
           <Outlet />
         </Content>
       </AntLayout>
+      <Modal
+        title="修改密码"
+        open={pwdOpen}
+        onCancel={() => {
+          if (pwdLoading) return;
+          setPwdOpen(false);
+          pwdForm.resetFields();
+        }}
+        onOk={handleChangePassword}
+        okButtonProps={{ loading: pwdLoading }}
+        destroyOnClose
+      >
+        <Form form={pwdForm} layout="vertical" preserve={false}>
+          <Form.Item name="old_password" label="旧密码" rules={[{ required: true, message: '请输入旧密码' }]}> 
+            <Input.Password placeholder="请输入旧密码" />
+          </Form.Item>
+          <Form.Item name="new_password" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { min: 6, message: '至少6位' }]}> 
+            <Input.Password placeholder="至少6位" />
+          </Form.Item>
+          <Form.Item
+            name="confirm_password"
+            label="确认新密码"
+            dependencies={['new_password']}
+            rules={[
+              { required: true, message: '请再次输入新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('new_password') === value) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('两次输入的新密码不一致'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password placeholder="请再次输入新密码" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </AntLayout>
   );
 };

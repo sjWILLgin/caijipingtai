@@ -5,6 +5,16 @@ const api = axios.create({
   timeout: 30000,
 });
 
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('dcp_token');
+  if (token) {
+    const headers = (config.headers || {}) as any;
+    headers.Authorization = `Bearer ${token}`;
+    config.headers = headers;
+  }
+  return config;
+});
+
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -14,6 +24,31 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+function withToken(url: string) {
+  const token = localStorage.getItem('dcp_token');
+  if (!token) return url;
+  const joiner = url.includes('?') ? '&' : '?';
+  return `${url}${joiner}token=${encodeURIComponent(token)}`;
+}
+
+// Auth API
+export const authApi = {
+  register: (data: { username: string; password: string; display_name: string }) => api.post('/auth/register', data),
+  login: (data: { username: string; password: string }) => api.post('/auth/login', data),
+  me: () => api.get('/auth/me').then((res: any) => res.data),
+  listUsers: () => api.get('/auth/users').then((res: any) => res.data),
+  permissionMatrix: () => api.get('/auth/permission-matrix').then((res: any) => res.data),
+  getUserPermissions: (userId: number) => api.get(`/auth/users/${userId}/permissions`).then((res: any) => res.data),
+  updateUserPermissions: (userId: number, permissions: string[]) =>
+    api.put(`/auth/users/${userId}/permissions`, { permissions }).then((res: any) => res.data),
+  updateUserRole: (userId: number, roleKey: 'super_admin' | 'analyst') =>
+    api.put(`/auth/users/${userId}/role`, { role_key: roleKey }).then((res: any) => res.data),
+  resetUserPassword: (userId: number, newPassword: string) =>
+    api.post(`/auth/users/${userId}/reset-password`, { new_password: newPassword }),
+  changePassword: (data: { old_password: string; new_password: string }) =>
+    api.post('/auth/change-password', data),
+};
 
 // Import Plans API
 export const plansApi = {
@@ -53,7 +88,7 @@ export const filesApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  download: (fileId: string) => `/api/import-files/${fileId}/download`,
+  download: (fileId: string) => withToken(`/api/import-files/${fileId}/download`),
 };
 
 // Sheets/Mappings API
@@ -97,14 +132,15 @@ export const tablesApi = {
       usp.append(k, String(v));
     });
     const qs = usp.toString();
-    return `/api/tables/${encodeURIComponent(tableName)}/activities/export${qs ? `?${qs}` : ''}`;
+    const url = `/api/tables/${encodeURIComponent(tableName)}/activities/export${qs ? `?${qs}` : ''}`;
+    return withToken(url);
   },
   updateLifecycle: (tableName: string, data: { lifecycle_enabled: number; lifecycle_days: number; cleanup_strategy: 'DELETE_ROWS' | 'DROP_TABLE' }) =>
     api.put(`/tables/${encodeURIComponent(tableName)}/lifecycle`, data),
   removeTable: (tableName: string) => api.delete(`/tables/${encodeURIComponent(tableName)}`),
   getColumns: (tableName: string) => api.get(`/tables/${tableName}/columns`),
   getData: (tableName: string, params?: any) => api.get(`/tables/${tableName}/data`, { params }),
-  downloadTemplate: (tableName: string) => `/api/tables/${encodeURIComponent(tableName)}/template`,
+  downloadTemplate: (tableName: string) => withToken(`/api/tables/${encodeURIComponent(tableName)}/template`),
 };
 
 // Dashboard API
