@@ -4,6 +4,7 @@ import pool from '../db';
 
 const NUMERIC_TYPES = new Set(['tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint', 'decimal', 'float', 'double']);
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp']);
+const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
 
 const isEmptyValue = (v: any) => v === null || v === undefined || String(v).trim() === '';
 const IMPORT_CHUNK_SIZE = Math.max(100, Number(process.env.IMPORT_CHUNK_SIZE || 1000));
@@ -118,8 +119,8 @@ export async function runValidation(task_id: string): Promise<void> {
         const [targetColumns]: any = await pool.query(
           `SELECT COLUMN_NAME, DATA_TYPE
            FROM INFORMATION_SCHEMA.COLUMNS
-           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
-          [sheet.target_table]
+           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+          [TARGET_DB, sheet.target_table]
         );
         for (const col of targetColumns) {
           columnTypeMap[col.COLUMN_NAME] = col.DATA_TYPE;

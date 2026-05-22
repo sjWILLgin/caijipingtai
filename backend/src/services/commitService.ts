@@ -5,6 +5,7 @@ import pool from '../db';
 const NUMERIC_TYPES = new Set(['tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint', 'decimal', 'float', 'double']);
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp']);
 const META_DB = process.env.META_DB_NAME || 'data_collection_meta';
+const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
 const IMPORT_CHUNK_SIZE = Math.max(100, Number(process.env.IMPORT_CHUNK_SIZE || 1000));
 const MAX_COMMIT_ROWS = Number(process.env.IMPORT_MAX_ROWS || 200000);
 const MAX_TARGET_ROWS = Number(process.env.IMPORT_MAX_TARGET_ROWS || 5000000);
@@ -12,6 +13,13 @@ const MAX_SNAPSHOT_ROWS = Number(process.env.ROLLBACK_SNAPSHOT_MAX_ROWS || 50000
 
 function isSafeIdentifier(name: string) {
   return /^[a-zA-Z0-9_]+$/.test(name);
+}
+
+function qTargetTable(tableName: string) {
+  if (!isSafeIdentifier(TARGET_DB) || !isSafeIdentifier(tableName)) {
+    throw new Error('目标库或表名非法');
+  }
+  return `\`${TARGET_DB}\`.\`${tableName}\``;
 }
 
 function buildSnapshotTableName(batchId: string, targetTable: string) {
@@ -85,8 +93,8 @@ async function createRollbackSnapshot(
   const snapshotId = `${batchId}_${targetTable}`;
 
   await pool.query(`DROP TABLE IF EXISTS \`${META_DB}\`.\`${snapshotTable}\``);
-  await pool.query(`CREATE TABLE \`${META_DB}\`.\`${snapshotTable}\` LIKE \`${targetTable}\``);
-  await pool.query(`INSERT INTO \`${META_DB}\`.\`${snapshotTable}\` SELECT * FROM \`${targetTable}\``);
+  await pool.query(`CREATE TABLE \`${META_DB}\`.\`${snapshotTable}\` LIKE ${qTargetTable(targetTable)}`);
+  await pool.query(`INSERT INTO \`${META_DB}\`.\`${snapshotTable}\` SELECT * FROM ${qTargetTable(targetTable)}`);
 
   const [countRows]: any = await pool.query(
     `SELECT COUNT(*) AS total FROM \`${META_DB}\`.\`${snapshotTable}\``
@@ -110,7 +118,7 @@ async function checkTargetTableCapacity(targetTable: string, incomingRows: numbe
   if (MAX_TARGET_ROWS <= 0) return;
   if (!['APPEND', 'UPSERT', 'PARTITION_OVERWRITE'].includes(writeMode)) return;
 
-  const [countRows]: any = await pool.query(`SELECT COUNT(*) AS total FROM \`${targetTable}\``);
+  const [countRows]: any = await pool.query(`SELECT COUNT(*) AS total FROM ${qTargetTable(targetTable)}`);
   const current = Number(countRows[0]?.total || 0);
   const projected = current + Math.max(0, incomingRows);
   if (projected > MAX_TARGET_ROWS) {
@@ -224,8 +232,8 @@ export async function commitData(
 
       // Target table column metadata for type-safe value normalization
       const [targetColumns]: any = await pool.query(
-        `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
-        [targetTable]
+        `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+        [TARGET_DB, targetTable]
       );
       const columnTypeMap: Record<string, string> = {};
       for (const c of targetColumns) {
@@ -249,7 +257,7 @@ export async function commitData(
         );
         // Mark old data as invalid
         try {
-          await pool.query(`UPDATE \`${targetTable}\` SET is_valid = 0, is_latest = 0 WHERE is_valid = 1 AND task_id != ?`, [task_id]);
+          await pool.query(`UPDATE ${qTargetTable(targetTable)} SET is_valid = 0, is_latest = 0 WHERE is_valid = 1 AND task_id != ?`, [task_id]);
         } catch (e: any) {
           console.warn('分区覆盖旧数据失败:', e.message);
         }
@@ -304,12 +312,12 @@ export async function commitData(
             if (write_mode === 'UPSERT') {
               const updateParts = Object.keys(rowData).filter(k => k !== 'id').map(k => `\`${k}\` = VALUES(\`${k}\`)`).join(', ');
               await pool.query(
-                `INSERT INTO \`${targetTable}\` (${cols}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateParts}`,
+                `INSERT INTO ${qTargetTable(targetTable)} (${cols}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateParts}`,
                 values
               );
             } else {
               await pool.query(
-                `INSERT INTO \`${targetTable}\` (${cols}) VALUES (${placeholders})`,
+                `INSERT INTO ${qTargetTable(targetTable)} (${cols}) VALUES (${placeholders})`,
                 values
               );
             }

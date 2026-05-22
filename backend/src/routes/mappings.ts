@@ -3,6 +3,7 @@ import pool from '../db';
 import { successResponse, errorResponse } from '../utils';
 
 const router = Router();
+const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
 
 // GET /api/mappings/:taskId - 获取字段映射
 router.get('/:taskId', async (req: Request, res: Response) => {
@@ -54,7 +55,7 @@ router.post('/:taskId/auto-map', async (req: Request, res: Response) => {
       // Get target table columns from MySQL
       const [columns]: any = await pool.query(
         'SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
-        ['data_collection_platform', sheet.target_table]
+        [TARGET_DB, sheet.target_table]
       );
 
       const columnMap: Record<string, any> = {};
@@ -129,14 +130,14 @@ router.get('/:taskId/target-fields', async (req: Request, res: Response) => {
       // Return hp_sfa_business_group as default
       const [columns]: any = await pool.query(
         'SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_COMMENT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
-        ['data_collection_platform', 'hp_sfa_business_group']
+        [TARGET_DB, 'hp_sfa_business_group']
       );
       return res.json(successResponse(columns));
     }
 
     const [columns]: any = await pool.query(
       'SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_COMMENT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
-      ['data_collection_platform', sheetRow.target_table]
+      [TARGET_DB, sheetRow.target_table]
     );
 
     res.json(successResponse(columns));
