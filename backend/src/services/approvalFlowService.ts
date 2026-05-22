@@ -119,6 +119,33 @@ function normalizeTargetTables(input: any): string[] {
   return uniq;
 }
 
+async function loadFallbackTargetTablesMap(templateIds: number[]) {
+  const ids = Array.from(new Set((templateIds || []).map((id) => Number(id)).filter((id) => id > 0)));
+  const result: Record<number, string[]> = {};
+  if (!ids.length) return result;
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const [rows]: any = await pool.query(
+    `SELECT flow_template_id, table_name
+     FROM manual_table_approval_config
+     WHERE flow_template_id IN (${placeholders})
+       AND approval_required = 1
+       AND table_name IS NOT NULL
+       AND table_name <> ''`,
+    ids
+  );
+
+  for (const row of rows || []) {
+    const tid = Number(row.flow_template_id || 0);
+    const tableName = String(row.table_name || '').trim().toLowerCase();
+    if (!tid || !tableName) continue;
+    if (!result[tid]) result[tid] = [];
+    if (!result[tid].includes(tableName)) result[tid].push(tableName);
+  }
+
+  return result;
+}
+
 async function getTemplateById(templateId: number): Promise<FlowTemplate | null> {
   const [rows]: any = await pool.query(
     `SELECT id, flow_code, flow_name, domain, target_tables_json, enabled, version
@@ -163,12 +190,18 @@ async function getTemplateById(templateId: number): Promise<FlowTemplate | null>
     });
   });
 
+  let targetTables = parseStringArray(rows[0].target_tables_json).map((t) => t.toLowerCase());
+  if (!targetTables.length) {
+    const fallbackMap = await loadFallbackTargetTablesMap([templateId]);
+    targetTables = fallbackMap[templateId] || [];
+  }
+
   return {
     id: Number(rows[0].id),
     flow_code: rows[0].flow_code,
     flow_name: rows[0].flow_name,
     domain: rows[0].domain || null,
-    target_tables: parseStringArray(rows[0].target_tables_json),
+    target_tables: targetTables,
     enabled: Number(rows[0].enabled || 0),
     version: Number(rows[0].version || 1),
     nodes: nodeRows.map((n: any) => ({
@@ -467,17 +500,29 @@ export async function listApprovalTemplates(authUser: AuthUser) {
     rows = r;
   }
 
-  return rows.map((r: any) => ({
+  const mapped = rows.map((r: any) => ({
     id: Number(r.id),
     flow_code: r.flow_code,
     flow_name: r.flow_name,
     domain: r.domain || null,
-    target_tables: parseStringArray(r.target_tables_json),
+    target_tables: parseStringArray(r.target_tables_json).map((t) => t.toLowerCase()),
     enabled: Number(r.enabled || 0),
     version: Number(r.version || 1),
     created_at: r.created_at,
     updated_at: r.updated_at,
   }));
+
+  const missingIds = mapped.filter((m: any) => !m.target_tables?.length).map((m: any) => Number(m.id));
+  if (!missingIds.length) return mapped;
+
+  const fallbackMap = await loadFallbackTargetTablesMap(missingIds);
+  return mapped.map((m: any) => {
+    if (m.target_tables?.length) return m;
+    return {
+      ...m,
+      target_tables: fallbackMap[Number(m.id)] || [],
+    };
+  });
 }
 
 export async function listApprovalTemplatesWithNodes(authUser: AuthUser) {
@@ -512,7 +557,7 @@ export async function matchApprovalTemplatesByTable(params: {
        ORDER BY id ASC`;
 
   const [rows]: any = await pool.query(sql);
-  const matched = (rows || [])
+  const rawTemplates = (rows || [])
     .map((r: any) => ({
       id: Number(r.id),
       flow_code: String(r.flow_code || ''),
@@ -523,7 +568,19 @@ export async function matchApprovalTemplatesByTable(params: {
       version: Number(r.version || 1),
       created_at: r.created_at,
       updated_at: r.updated_at,
-    }))
+    }));
+
+  const missingIds = rawTemplates.filter((t: any) => !t.target_tables?.length).map((t: any) => Number(t.id));
+  if (missingIds.length) {
+    const fallbackMap = await loadFallbackTargetTablesMap(missingIds);
+    rawTemplates.forEach((t: any) => {
+      if (!t.target_tables?.length) {
+        t.target_tables = fallbackMap[Number(t.id)] || [];
+      }
+    });
+  }
+
+  const matched = rawTemplates
     .filter((t: any) => {
       const hitTable = t.target_tables.includes(targetTable);
       if (!hitTable) return false;
