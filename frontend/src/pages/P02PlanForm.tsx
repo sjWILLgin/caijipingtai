@@ -179,7 +179,20 @@ const P02PlanForm: React.FC = () => {
       </div>
 
       <Card loading={loading}>
-        <Form form={form} layout="vertical">
+        <Form
+          form={form}
+          layout="vertical"
+          onValuesChange={(_, allValues) => {
+            const tableName = allValues?.target_table;
+            const domain = allValues?.domain;
+            if (tableName) {
+              fetchApprovalRule(tableName, domain);
+            } else {
+              setApprovalRule({ requireApproval: 0, templates: [] });
+              form.setFieldValue('require_approval', false);
+            }
+          }}
+        >
           <Title level={5}>基本信息</Title>
           <Row gutter={16}>
             <Col span={8}>
@@ -191,6 +204,10 @@ const P02PlanForm: React.FC = () => {
               <Form.Item name="domain" label="业务域" rules={[{ required: true, message: '请选择业务域' }]}>
                 <Select
                   placeholder="选择业务域"
+                  onChange={(v) => {
+                    const tableName = form.getFieldValue('target_table');
+                    if (tableName) fetchApprovalRule(String(tableName), String(v || ''));
+                  }}
                   options={[
                     { value: '销售数据域', label: '销售数据域' },
                     { value: '渠道数据域', label: '渠道数据域' },
@@ -234,6 +251,9 @@ const P02PlanForm: React.FC = () => {
                     showSearch
                     placeholder="选择目标表（单Sheet时配置）"
                     options={tables}
+                    onChange={(v) => {
+                      fetchApprovalRule(String(v || ''), String(form.getFieldValue('domain') || ''));
+                    }}
                     style={{ width: 'calc(100% - 110px)' }}
                     filterOption={(input, opt) => (opt?.value as string)?.toLowerCase().includes(input.toLowerCase())}
                   />
