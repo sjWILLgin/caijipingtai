@@ -202,6 +202,64 @@ router.get('/users', authRequired, requireRole('super_admin'), async (_req: Requ
   }
 });
 
+router.get('/operation-center', authRequired, requireRole('super_admin'), async (req: Request, res: Response) => {
+  try {
+    const qDate = String(req.query.date || '').trim();
+    const operator = String(req.query.operator || '').trim();
+    const logType = String(req.query.log_type || '').trim();
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = Math.min(200, Math.max(10, Number(req.query.page_size || 50)));
+    const offset = (page - 1) * pageSize;
+
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(qDate)
+      ? qDate
+      : new Date().toISOString().slice(0, 10);
+
+    const where: string[] = ['DATE(created_at) = ?'];
+    const params: any[] = [date];
+
+    if (operator) {
+      where.push('(operator_name LIKE ? OR operator_id LIKE ?)');
+      params.push(`%${operator}%`, `%${operator}%`);
+    }
+
+    if (logType) {
+      where.push('log_type = ?');
+      params.push(logType);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const [countRows]: any = await pool.query(
+      `SELECT COUNT(*) AS total
+       FROM audit_log
+       ${whereSql}`,
+      params
+    );
+
+    const [rows]: any = await pool.query(
+      `SELECT id, task_id, batch_id, log_type, log_level, operator_id, operator_name, message, detail, created_at
+       FROM audit_log
+       ${whereSql}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+
+    return res.json(
+      successResponse({
+        date,
+        page,
+        page_size: pageSize,
+        total: Number(countRows[0]?.total || 0),
+        list: rows,
+      })
+    );
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '获取操作日志失败'));
+  }
+});
+
 router.get('/permission-matrix', authRequired, requireRole('super_admin'), async (_req: Request, res: Response) => {
   return res.json(successResponse(PERMISSION_MATRIX));
 });

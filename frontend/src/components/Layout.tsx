@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag, Button, Space, Modal, Form, Input, message, Dropdown, Avatar } from 'antd';
-import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined, UserOutlined, DownOutlined, LogoutOutlined, LockOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined, UserOutlined, DownOutlined, LogoutOutlined, LockOutlined, BellOutlined } from '@ant-design/icons';
 import { authApi } from '../services/api';
 
 const { Header, Sider, Content } = AntLayout;
@@ -29,6 +29,7 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     if (location.pathname.startsWith('/import-tasks')) return 'tasks';
     if (location.pathname.startsWith('/manual-tables')) return 'manual-tables';
     if (location.pathname.startsWith('/user-admin')) return 'user-admin';
+    if (location.pathname.startsWith('/ops-center')) return 'ops-center';
     return 'home';
   };
 
@@ -47,6 +48,7 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     if (/\/import-tasks\/[^/]+$/.test(p)) return [{ title: '任务记录' }, { title: '任务详情' }];
     if (p === '/manual-tables') return [{ title: '运维监控' }, { title: '手工数据表清单' }];
     if (p === '/user-admin') return [{ title: '系统管理' }, { title: '用户权限' }];
+    if (p === '/ops-center') return [{ title: '系统管理' }, { title: '信息中心' }];
     return [{ title: '导入方案' }];
   };
 
@@ -167,6 +169,12 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
                       icon: <UserOutlined />,
                       label: '用户权限',
                       onClick: () => navigate('/user-admin'),
+                    },
+                    {
+                      key: 'ops-center',
+                      icon: <BellOutlined />,
+                      label: '信息中心',
+                      onClick: () => navigate('/ops-center'),
                     },
                   ]
                 : []),

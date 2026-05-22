@@ -47,6 +47,8 @@ export const authApi = {
   resetUserPassword: (userId: number, newPassword: string) =>
     api.post(`/auth/users/${userId}/reset-password`, { new_password: newPassword }),
   deleteUser: (userId: number) => api.delete(`/auth/users/${userId}`),
+  operationCenter: (params?: { date?: string; operator?: string; log_type?: string; page?: number; page_size?: number }) =>
+    api.get('/auth/operation-center', { params }).then((res: any) => res.data),
   changePassword: (data: { old_password: string; new_password: string }) =>
     api.post('/auth/change-password', data),
 };

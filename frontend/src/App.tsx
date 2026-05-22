@@ -15,6 +15,7 @@ import P08TaskDetail from './pages/P08TaskDetail';
 import P09TaskList from './pages/P09TaskList';
 import P10ManualTables from './pages/P10ManualTables';
 import P11UserAdmin from './pages/P11UserAdmin';
+import P12OperationCenter from './pages/P12OperationCenter';
 import P99Auth from './pages/P99Auth';
 import { authApi } from './services/api';
 
@@ -110,6 +111,9 @@ const App: React.FC = () => {
                       />
                     }
                   />
+                ) : null}
+                {currentUser.role_key === 'super_admin' ? (
+                  <Route path="ops-center" element={<P12OperationCenter />} />
                 ) : null}
               </Route>
               <Route path="/login" element={<Navigate to="/home" replace />} />
