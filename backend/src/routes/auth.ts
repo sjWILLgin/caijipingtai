@@ -75,9 +75,7 @@ router.post('/register', async (req: Request, res: Response) => {
       return res.status(400).json(errorResponse('用户名已存在'));
     }
 
-    const [countRows]: any = await pool.query('SELECT COUNT(*) AS c FROM sys_user');
-    const firstUser = Number(countRows[0]?.c || 0) === 0;
-    const roleKey: 'super_admin' | 'analyst' = firstUser ? 'super_admin' : 'analyst';
+    const roleKey: 'super_admin' | 'analyst' = 'analyst';
 
     const passwordHash = await bcrypt.hash(password, 10);
     const [result]: any = await pool.query(
@@ -107,7 +105,7 @@ router.post('/register', async (req: Request, res: Response) => {
             permissions,
           },
         },
-        firstUser ? '注册成功，已授予超级管理员权限' : '注册成功，默认分析师权限'
+        '注册成功，默认分析师权限'
       )
     );
   } catch (err: any) {
@@ -228,6 +226,15 @@ router.put('/users/:userId/role', authRequired, requireRole('super_admin'), asyn
     }
 
     const targetCurrentRole = targetUser.role_key || 'analyst';
+
+    if (targetUser.username === 'root' && role_key !== 'super_admin') {
+      return res.status(400).json(errorResponse('root 必须保持超级管理员'));
+    }
+
+    if (role_key === 'super_admin' && targetUser.username !== 'root') {
+      return res.status(400).json(errorResponse('仅 root 可以设置为超级管理员'));
+    }
+
     if (targetCurrentRole === 'super_admin' && role_key !== 'super_admin') {
       const [countRows]: any = await pool.query(
         `SELECT COUNT(*) AS c
@@ -353,6 +360,53 @@ router.post('/users/:userId/reset-password', authRequired, requireRole('super_ad
     return res.json(successResponse(true, '重置密码成功'));
   } catch (err: any) {
     return res.status(500).json(errorResponse(err.message || '重置密码失败'));
+  }
+});
+
+router.delete('/users/:userId', authRequired, requireRole('super_admin'), async (req: Request, res: Response) => {
+  try {
+    const authUser = (req as any).authUser;
+    const userId = Number(req.params.userId);
+
+    if (!userId) {
+      return res.status(400).json(errorResponse('用户ID无效'));
+    }
+
+    const user = await getUserWithRoleById(userId);
+    if (!user) {
+      return res.status(404).json(errorResponse('用户不存在'));
+    }
+
+    if (user.username === 'root') {
+      return res.status(400).json(errorResponse('root 账号不可删除'));
+    }
+
+    if (authUser.userId === userId) {
+      return res.status(400).json(errorResponse('不允许删除当前登录账号'));
+    }
+
+    await pool.query('DELETE FROM sys_user WHERE id = ?', [userId]);
+
+    await pool.query(
+      `INSERT INTO audit_log (log_type, log_level, operator_id, operator_name, message, detail)
+       VALUES ('SYSTEM', 'WARN', ?, ?, ?, ?)`,
+      [
+        String(authUser.userId),
+        String(authUser.username),
+        `删除账号：${user.username}`,
+        JSON.stringify({
+          action: 'DELETE_USER',
+          deleted_user_id: user.id,
+          deleted_username: user.username,
+          deleted_display_name: user.display_name,
+          deleted_role_key: user.role_key || 'analyst',
+        }),
+      ]
+    );
+
+    return res.json(successResponse(true, '账号删除成功'));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '删除账号失败'));
   }
 });
 

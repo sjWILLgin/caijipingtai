@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Typography, Select, message, Space, Tag, Modal, Checkbox, Divider, Input } from 'antd';
+import { Card, Table, Typography, Select, message, Space, Tag, Modal, Checkbox, Divider, Input, Popconfirm, Button } from 'antd';
 import { authApi } from '../services/api';
 
 type UserRow = {
@@ -130,6 +130,19 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
     }
   };
 
+  const deleteUser = async (user: UserRow) => {
+    try {
+      setLoading(true);
+      await authApi.deleteUser(user.id);
+      message.success(`已删除账号 ${user.username}`);
+      await loadUsers();
+    } catch (err: any) {
+      message.error(err.message || '删除账号失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Card>
       <Typography.Title level={4} style={{ marginTop: 0 }}>
@@ -182,11 +195,32 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
                 <Tag color="red" style={{ cursor: 'pointer' }} onClick={() => openResetPassword(record)}>
                   重置密码
                 </Tag>
+                <Popconfirm
+                  title="确认删除该账号？"
+                  description={`账号 ${record.username} 删除后不可恢复。`}
+                  okText="确认删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  disabled={record.username === 'root' || record.id === currentUserId}
+                  onConfirm={() => deleteUser(record)}
+                >
+                  <Button
+                    size="small"
+                    danger
+                    disabled={record.username === 'root' || record.id === currentUserId}
+                  >
+                    删除账号
+                  </Button>
+                </Popconfirm>
               </Space>
             ),
           },
         ]}
       />
+
+      <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+        说明：root 与当前登录账号不可删除；删除操作会记录到审计日志。
+      </Typography.Paragraph>
 
       <Modal
         title={`配置权限：${selectedUser?.display_name || ''}`}

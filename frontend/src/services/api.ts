@@ -46,6 +46,7 @@ export const authApi = {
     api.put(`/auth/users/${userId}/role`, { role_key: roleKey }).then((res: any) => res.data),
   resetUserPassword: (userId: number, newPassword: string) =>
     api.post(`/auth/users/${userId}/reset-password`, { new_password: newPassword }),
+  deleteUser: (userId: number) => api.delete(`/auth/users/${userId}`),
   changePassword: (data: { old_password: string; new_password: string }) =>
     api.post('/auth/change-password', data),
 };

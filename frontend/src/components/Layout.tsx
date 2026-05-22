@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag, Button, Space, Modal, Form, Input, message } from 'antd';
-import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined, UserOutlined } from '@ant-design/icons';
+import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag, Button, Space, Modal, Form, Input, message, Dropdown, Avatar } from 'antd';
+import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined, UserOutlined, DownOutlined, LogoutOutlined, LockOutlined } from '@ant-design/icons';
 import { authApi } from '../services/api';
 
 const { Header, Sider, Content } = AntLayout;
@@ -79,6 +79,24 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     }
   };
 
+  const accountMenuItems = [
+    {
+      key: 'change-password',
+      icon: <LockOutlined />,
+      label: '修改密码',
+      onClick: () => setPwdOpen(true),
+    },
+    {
+      type: 'divider' as const,
+    },
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: '退出登录',
+      onClick: onLogout,
+    },
+  ];
+
   return (
     <AntLayout style={{ minHeight: '100vh' }}>
       <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', background: '#0f172a' }}>
@@ -96,9 +114,19 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
           <Tag color={currentUser.role_key === 'super_admin' ? 'gold' : 'geekblue'}>
             {currentUser.role_key === 'super_admin' ? '超级管理员' : '分析师'}
           </Tag>
-          <Typography.Text style={{ color: '#cbd5e1' }}>{currentUser.display_name}</Typography.Text>
-          <Button size="small" onClick={() => setPwdOpen(true)}>修改密码</Button>
-          <Button size="small" onClick={onLogout}>退出登录</Button>
+          <Dropdown menu={{ items: accountMenuItems }} trigger={['click']}>
+            <Button
+              size="small"
+              type="text"
+              style={{ color: '#e2e8f0', paddingInline: 8, height: 30 }}
+            >
+              <Space size={6}>
+                <Avatar size={22} icon={<UserOutlined />} style={{ backgroundColor: '#1d4ed8' }} />
+                <span>{currentUser.display_name}</span>
+                <DownOutlined style={{ fontSize: 10 }} />
+              </Space>
+            </Button>
+          </Dropdown>
         </Space>
       </Header>
       <AntLayout>

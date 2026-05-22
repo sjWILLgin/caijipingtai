@@ -77,6 +77,22 @@ export async function initAuthTables() {
       [rootUserId]
     );
     await pool.query('DELETE FROM sys_user_permission WHERE user_id = ?', [rootUserId]);
+
+    // Enforce root-only super admin: demote other super_admin users to analyst.
+    await pool.query(
+      `DELETE ur FROM sys_user_role ur
+       JOIN sys_role r ON r.id = ur.role_id
+       WHERE r.role_key = 'super_admin' AND ur.user_id <> ?`,
+      [rootUserId]
+    );
+    await pool.query(
+      `INSERT IGNORE INTO sys_user_role (user_id, role_id)
+       SELECT u.id, r.id
+       FROM sys_user u
+       JOIN sys_role r ON r.role_key = 'analyst'
+       WHERE u.id <> ?`,
+      [rootUserId]
+    );
   }
 
   const [analystRows]: any = await pool.query(
