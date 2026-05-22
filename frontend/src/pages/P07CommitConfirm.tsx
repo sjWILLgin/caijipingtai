@@ -15,6 +15,30 @@ const WRITE_MODE_LABELS: Record<string, string> = {
   UPSERT: '主键更新',
 };
 
+const toSignLabel = (v?: string) => {
+  if (v === 'SERIAL') return '按顺序逐级审批';
+  if (v === 'OR_SIGN') return '任意一人同意即可';
+  if (v === 'AND_SIGN') return '需要多人共同同意';
+  return '按审批规则执行';
+};
+
+const toPassLabel = (node: any) => {
+  if (node?.pass_rule === 'MIN_PASS_COUNT') {
+    const n = Number(node?.min_pass_count || 0);
+    return n > 0 ? `至少 ${n} 人同意` : '按人数阈值通过';
+  }
+  if (node?.pass_rule === 'ALL_PASS') return '全部同意才通过';
+  return '有人同意即可通过';
+};
+
+const toRejectLabel = (node: any) => {
+  if (node?.reject_rule === 'THRESHOLD_REJECT') {
+    const n = Number(node?.reject_threshold || 0);
+    return n > 0 ? `达到 ${n} 人驳回即终止` : '达到驳回人数阈值即终止';
+  }
+  return '有人驳回即终止';
+};
+
 const P07CommitConfirm: React.FC = () => {
   const navigate = useNavigate();
   const { taskId } = useParams<{ taskId: string }>();
@@ -198,9 +222,9 @@ const P07CommitConfirm: React.FC = () => {
                     <Space wrap>
                       <Tag color="blue">节点{node.node_order}</Tag>
                       <span>{node.node_name}</span>
-                      <Tag>{node.sign_type}</Tag>
-                      <Tag>{node.pass_rule}</Tag>
-                      <Tag>{node.reject_rule || 'ANY_REJECT'}</Tag>
+                      <Tag color="geekblue">{toSignLabel(node.sign_type)}</Tag>
+                      <Tag color="green">通过条件：{toPassLabel(node)}</Tag>
+                      <Tag color="volcano">终止条件：{toRejectLabel(node)}</Tag>
                     </Space>
                   </div>
                 ))}

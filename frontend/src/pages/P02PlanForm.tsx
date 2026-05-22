@@ -21,6 +21,42 @@ const WRITE_MODES = [
   { value: 'FULL_OVERWRITE', label: '全量覆盖 (FULL_OVERWRITE) ⚠️ 高风险' },
 ];
 
+const toSignLabel = (v?: string) => {
+  if (v === 'SERIAL') return '按顺序逐级审批';
+  if (v === 'OR_SIGN') return '任意一人同意即可';
+  if (v === 'AND_SIGN') return '需要多人共同同意';
+  return '按审批规则执行';
+};
+
+const toPassLabel = (node: any) => {
+  if (node?.pass_rule === 'MIN_PASS_COUNT') {
+    const n = Number(node?.min_pass_count || 0);
+    return n > 0 ? `至少 ${n} 人同意` : '按人数阈值通过';
+  }
+  if (node?.pass_rule === 'ALL_PASS') return '全部同意才通过';
+  return '有人同意即可通过';
+};
+
+const toRejectLabel = (node: any) => {
+  if (node?.reject_rule === 'THRESHOLD_REJECT') {
+    const n = Number(node?.reject_threshold || 0);
+    return n > 0 ? `达到 ${n} 人驳回即终止` : '达到驳回人数阈值即终止';
+  }
+  return '有人驳回即终止';
+};
+
+const toActorLabel = (actors: any[]) => {
+  if (!Array.isArray(actors) || actors.length === 0) return '由系统自动分配审批人';
+  const hasDomainAdmin = actors.some((a) => a?.actor_type === 'DOMAIN_ADMIN');
+  const hasRole = actors.some((a) => a?.actor_type === 'ROLE');
+  const userCount = actors.filter((a) => a?.actor_type === 'USER').length;
+  if (hasDomainAdmin) return '由该业务域负责人审批';
+  if (hasRole && userCount > 0) return `由指定角色/人员审批（共 ${actors.length} 条规则）`;
+  if (hasRole) return '由指定角色审批';
+  if (userCount > 0) return `由指定人员审批（${userCount} 人）`;
+  return '由系统自动分配审批人';
+};
+
 const P02PlanForm: React.FC = () => {
   const navigate = useNavigate();
   const { planId } = useParams<{ planId?: string }>();
@@ -245,16 +281,10 @@ const P02PlanForm: React.FC = () => {
                           <Space wrap>
                             <Tag color="blue">节点{node.node_order}</Tag>
                             <strong>{node.node_name}</strong>
-                            <Tag>{node.sign_type}</Tag>
-                            <Tag>{node.pass_rule}</Tag>
-                            <Tag>{node.reject_rule || 'ANY_REJECT'}</Tag>
-                            <span>
-                              审批人规则：{(node.actors || []).map((a: any) => {
-                                if (a.actor_type === 'USER') return `指定用户(${a.actor_value})`;
-                                if (a.actor_type === 'ROLE') return `角色(${a.actor_value})`;
-                                return '域管理员';
-                              }).join(' / ')}
-                            </span>
+                            <Tag color="geekblue">{toSignLabel(node.sign_type)}</Tag>
+                            <Tag color="green">通过条件：{toPassLabel(node)}</Tag>
+                            <Tag color="volcano">终止条件：{toRejectLabel(node)}</Tag>
+                            <span>审批人：{toActorLabel(node.actors || [])}</span>
                           </Space>
                         </div>
                       ))}
