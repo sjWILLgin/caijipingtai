@@ -5,6 +5,7 @@ import { createApprovalTemplate, decideInstance, deleteApprovalTemplate, getAppr
 import { ensureDomainTable, validateDomainNames } from '../services/domainService';
 
 const router = Router();
+const TARGET_DB = process.env.TARGET_DB_NAME || 'data_collection_target';
 
 type AuthUser = {
   userId: number;
@@ -24,6 +25,125 @@ async function canReview(authUser: AuthUser, reqRow: any) {
   if (reqRow.approver_user_id && Number(reqRow.approver_user_id) !== authUser.userId) return false;
   const domains = await getUserDomains(authUser.userId);
   return !reqRow.domain || domains.includes(String(reqRow.domain));
+}
+
+function isSafeIdentifier(name: string) {
+  return /^[a-zA-Z0-9_]+$/.test(name);
+}
+
+function qTargetTable(tableName: string) {
+  if (!isSafeIdentifier(TARGET_DB) || !isSafeIdentifier(tableName)) {
+    throw new Error('目标库或表名非法');
+  }
+  return `\`${TARGET_DB}\`.\`${tableName}\``;
+}
+
+function safeParseJson(v: any): any {
+  if (!v) return null;
+  if (typeof v === 'object') return v;
+  try {
+    return JSON.parse(String(v));
+  } catch {
+    return null;
+  }
+}
+
+function escapeSqlComment(input: string) {
+  return String(input || '').replace(/'/g, "''").trim();
+}
+
+function normalizeColumnType(raw: string) {
+  const text = String(raw || '').trim().toUpperCase();
+  const m = text.match(/^([A-Z]+)(\((\d+)(,(\d+))?\))?$/);
+  if (!m) return null;
+  const base = m[1];
+  const allowed = new Set(['VARCHAR', 'INT', 'BIGINT', 'TINYINT', 'DECIMAL', 'DOUBLE', 'TEXT', 'LONGTEXT', 'DATE', 'DATETIME']);
+  if (!allowed.has(base)) return null;
+  if ((base === 'VARCHAR' || base === 'DECIMAL') && !m[2]) return null;
+  return text;
+}
+
+function buildCreateTableSqlFromSnapshot(snapshot: any) {
+  const tableName = String(snapshot?.table_name || '').trim();
+  const tableComment = String(snapshot?.table_comment || '').trim();
+  const columns = Array.isArray(snapshot?.columns) ? snapshot.columns : [];
+
+  if (!isSafeIdentifier(tableName)) {
+    throw new Error('审批快照中的表名非法');
+  }
+  if (!columns.length) {
+    throw new Error('审批快照中缺少字段定义');
+  }
+
+  const reserved = new Set(['id', 'batch_id', 'task_id', 'import_user', 'import_time', 'plan_version', 'is_valid', 'is_latest', 'source_row_no']);
+  const seen = new Set<string>();
+
+  const bizCols = columns.map((c: any) => {
+    const name = String(c.name || '').trim();
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(name)) {
+      throw new Error(`字段名不合法: ${name}`);
+    }
+    const lowered = name.toLowerCase();
+    if (reserved.has(lowered)) {
+      throw new Error(`字段名与系统字段冲突: ${name}`);
+    }
+    if (seen.has(lowered)) {
+      throw new Error(`字段名重复: ${name}`);
+    }
+    seen.add(lowered);
+
+    const columnType = normalizeColumnType(String(c.column_type || c.type || ''));
+    if (!columnType) {
+      throw new Error(`字段类型不支持: ${c.column_type || c.type || ''}`);
+    }
+    const nullable = Number(c.nullable ? 1 : 0) === 1 ? 'NULL' : 'NOT NULL';
+    const comment = escapeSqlComment(String(c.comment || ''));
+    return `\`${name}\` ${columnType} ${nullable}${comment ? ` COMMENT '${comment}'` : ''}`;
+  });
+
+  const tableCmt = escapeSqlComment(tableComment);
+  const ddl = `CREATE TABLE ${qTargetTable(tableName)} (
+  \`id\` BIGINT NOT NULL AUTO_INCREMENT,
+  \`batch_id\` VARCHAR(64) NULL COMMENT '导入批次ID',
+  \`task_id\` VARCHAR(64) NULL COMMENT '导入任务ID',
+  \`import_user\` VARCHAR(64) NULL COMMENT '导入用户',
+  \`import_time\` DATETIME NULL COMMENT '导入时间',
+  \`plan_version\` INT NULL COMMENT '方案版本',
+  \`is_valid\` TINYINT NOT NULL DEFAULT 1 COMMENT '是否有效',
+  \`is_latest\` TINYINT NOT NULL DEFAULT 1 COMMENT '是否最新',
+  \`source_row_no\` INT NULL COMMENT '来源行号',
+  ${bizCols.join(',\n  ')},
+  PRIMARY KEY (\`id\`),
+  KEY \`idx_batch_id\` (\`batch_id\`),
+  KEY \`idx_task_id\` (\`task_id\`),
+  KEY \`idx_valid_latest\` (\`is_valid\`,\`is_latest\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCmt ? ` COMMENT='${tableCmt}'` : ''}`;
+
+  return { ddl, tableName };
+}
+
+async function ensureManualTableRegistry() {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS manual_table_registry (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      table_name VARCHAR(128) NOT NULL UNIQUE,
+      table_comment VARCHAR(255) NULL,
+      domain VARCHAR(64) NOT NULL DEFAULT '',
+      create_request_id INT NULL,
+      create_request_no VARCHAR(64) NULL,
+      latest_approval_status ENUM('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+      creator_id INT NULL,
+      creator_name VARCHAR(64) NULL,
+      biz_columns LONGTEXT NULL,
+      ddl_preview LONGTEXT NULL,
+      approved_at DATETIME NULL,
+      approved_by VARCHAR(64) NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_domain (domain),
+      KEY idx_status (latest_approval_status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
 }
 
 router.get('/my', async (req: Request, res: Response) => {
@@ -299,13 +419,14 @@ async function decide(req: Request, res: Response, action: 'APPROVE' | 'REJECT')
     const comment = String(req.body?.comment || '').trim();
     if (!id) return res.status(400).json(errorResponse('审批单ID无效'));
 
-    if (await hasApprovalInstanceById(id)) {
-      const status = await decideInstance({ id, authUser, action, comment });
-      return res.json(successResponse(true, `审批动作已提交（当前状态：${status}）`));
-    }
-
     const [rows]: any = await pool.query('SELECT * FROM approval_request WHERE id = ? LIMIT 1', [id]);
-    if (!rows.length) return res.status(404).json(errorResponse('审批单不存在'));
+    if (!rows.length) {
+      if (await hasApprovalInstanceById(id)) {
+        const status = await decideInstance({ id, authUser, action, comment });
+        return res.json(successResponse(true, `审批动作已提交（当前状态：${status}）`));
+      }
+      return res.status(404).json(errorResponse('审批单不存在'));
+    }
 
     const reqRow = rows[0];
     if (reqRow.status !== 'PENDING') {
@@ -318,6 +439,83 @@ async function decide(req: Request, res: Response, action: 'APPROVE' | 'REJECT')
     }
 
     const nextStatus = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+
+    const approvalType = String(reqRow.approval_type || '');
+    const isTableCreate = approvalType === 'TABLE_CREATE' || (!approvalType && String(reqRow.task_id || '').startsWith('TABLE_CREATE_'));
+    const snapshot = safeParseJson(reqRow.snapshot);
+
+    if (action === 'APPROVE' && isTableCreate) {
+      const { ddl, tableName } = buildCreateTableSqlFromSnapshot(snapshot);
+
+      const [existsRows]: any = await pool.query(
+        `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+        [TARGET_DB, tableName]
+      );
+      if (!existsRows.length) {
+        await pool.query(ddl);
+      }
+
+      await pool.query(
+        `CREATE TABLE IF NOT EXISTS manual_table_lifecycle (
+          id INT PRIMARY KEY AUTO_INCREMENT,
+          table_name VARCHAR(128) NOT NULL UNIQUE,
+          lifecycle_enabled TINYINT DEFAULT 0,
+          lifecycle_days INT DEFAULT 365,
+          cleanup_strategy ENUM('DELETE_ROWS', 'DROP_TABLE') DEFAULT 'DELETE_ROWS',
+          last_cleanup_at DATETIME NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+      );
+
+      await pool.query(
+        `INSERT INTO manual_table_lifecycle (table_name, lifecycle_enabled, lifecycle_days, cleanup_strategy)
+         VALUES (?, 0, 365, 'DELETE_ROWS')
+         ON DUPLICATE KEY UPDATE updated_at = NOW()`,
+        [tableName]
+      );
+    }
+
+    if (isTableCreate) {
+      await ensureManualTableRegistry();
+      const tableName = String(reqRow.target_table || snapshot?.table_name || '').trim();
+      const tableComment = String(snapshot?.table_comment || '').trim();
+      const columns = Array.isArray(snapshot?.columns) ? snapshot.columns : [];
+      const ddlPreview = String(snapshot?.ddl_preview || '').trim();
+      await pool.query(
+        `INSERT INTO manual_table_registry
+          (table_name, table_comment, domain, create_request_id, create_request_no, latest_approval_status, creator_id, creator_name, biz_columns, ddl_preview, approved_at, approved_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           table_comment = VALUES(table_comment),
+           domain = VALUES(domain),
+           create_request_id = VALUES(create_request_id),
+           create_request_no = VALUES(create_request_no),
+           latest_approval_status = VALUES(latest_approval_status),
+           creator_id = VALUES(creator_id),
+           creator_name = VALUES(creator_name),
+           biz_columns = VALUES(biz_columns),
+           ddl_preview = VALUES(ddl_preview),
+           approved_at = VALUES(approved_at),
+           approved_by = VALUES(approved_by),
+           updated_at = NOW()`,
+        [
+          tableName,
+          tableComment || null,
+          String(reqRow.domain || snapshot?.domain || ''),
+          Number(reqRow.id),
+          String(reqRow.request_no || ''),
+          nextStatus,
+          Number(reqRow.applicant_id || 0),
+          String(reqRow.applicant_name || ''),
+          JSON.stringify(columns || []),
+          ddlPreview || null,
+          action === 'APPROVE' ? new Date() : null,
+          action === 'APPROVE' ? authUser.username : null,
+        ]
+      );
+    }
+
     await pool.query(
       'UPDATE approval_request SET status = ?, decided_at = NOW(), updated_at = NOW() WHERE id = ?',
       [nextStatus, id]

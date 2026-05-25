@@ -13,6 +13,19 @@ async function ensureColumn(table: string, column: string, ddl: string) {
   }
 }
 
+async function ensureApprovalTypeEnum(table: string, column: string) {
+  const [rows]: any = await pool.query(
+    `SELECT COLUMN_TYPE
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  const colType = String(rows?.[0]?.COLUMN_TYPE || '');
+  if (!colType.includes("'TABLE_CREATE'")) {
+    await pool.query(`ALTER TABLE ${table} MODIFY COLUMN ${column} ENUM('COMMIT','TABLE_CREATE') NOT NULL DEFAULT 'COMMIT'`);
+  }
+}
+
 async function seedDefaultFlowTemplates() {
   const [rows]: any = await pool.query(
     `SELECT id, flow_code FROM approval_flow_template WHERE flow_code IN ('DEFAULT_SUPER_ADMIN', 'DEFAULT_DOMAIN_OR_SIGN')`
@@ -58,6 +71,23 @@ async function seedDefaultFlowTemplates() {
 
 export async function initApprovalTables() {
   await pool.query(
+    `CREATE TABLE IF NOT EXISTS validate_rule (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      rule_id VARCHAR(64) NOT NULL UNIQUE,
+      plan_id VARCHAR(64) NOT NULL,
+      rule_name VARCHAR(128) NOT NULL,
+      rule_type VARCHAR(64) NOT NULL,
+      expression TEXT NULL,
+      error_level ENUM('ERROR', 'WARNING') NOT NULL DEFAULT 'ERROR',
+      status TINYINT NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_plan_status (plan_id, status),
+      KEY idx_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+
+  await pool.query(
     `CREATE TABLE IF NOT EXISTS sys_user_domain (
       id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT NOT NULL,
@@ -93,7 +123,7 @@ export async function initApprovalTables() {
     `CREATE TABLE IF NOT EXISTS approval_request (
       id INT PRIMARY KEY AUTO_INCREMENT,
       request_no VARCHAR(32) NOT NULL UNIQUE,
-      approval_type ENUM('COMMIT') NOT NULL DEFAULT 'COMMIT',
+      approval_type ENUM('COMMIT','TABLE_CREATE') NOT NULL DEFAULT 'COMMIT',
       task_id VARCHAR(50) NOT NULL,
       target_table VARCHAR(128) NULL,
       domain VARCHAR(64) NULL,
@@ -113,6 +143,14 @@ export async function initApprovalTables() {
       KEY idx_approver_role (approver_role),
       KEY idx_approver_user_id (approver_user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+
+  await ensureApprovalTypeEnum('approval_request', 'approval_type');
+  await pool.query(
+    `UPDATE approval_request
+     SET approval_type = 'TABLE_CREATE'
+     WHERE (approval_type = '' OR approval_type IS NULL)
+       AND task_id LIKE 'TABLE_CREATE_%'`
   );
 
   await pool.query(

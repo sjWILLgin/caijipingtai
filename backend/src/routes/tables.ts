@@ -5,7 +5,13 @@ import { getApprovalRuleStateByTable, syncApprovalRuleStateForTable } from '../s
 import { ensureDomainTable, validateDomainNames } from '../services/domainService';
 
 const router = Router();
-const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
+const TARGET_DB = process.env.TARGET_DB_NAME || 'data_collection_target';
+
+type AuthUser = {
+  userId: number;
+  username: string;
+  roleKey: 'super_admin' | 'domain_admin' | 'analyst';
+};
 
 const escapeCsvCell = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const CORE_TABLES = new Set([
@@ -97,6 +103,48 @@ async function ensureApprovalConfigTable() {
   }
 }
 
+async function ensureManualTableRegistry() {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS manual_table_registry (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      table_name VARCHAR(128) NOT NULL UNIQUE,
+      table_comment VARCHAR(255) NULL,
+      domain VARCHAR(64) NOT NULL DEFAULT '',
+      create_request_id INT NULL,
+      create_request_no VARCHAR(64) NULL,
+      latest_approval_status ENUM('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+      creator_id INT NULL,
+      creator_name VARCHAR(64) NULL,
+      biz_columns LONGTEXT NULL,
+      ddl_preview LONGTEXT NULL,
+      approved_at DATETIME NULL,
+      approved_by VARCHAR(64) NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_domain (domain),
+      KEY idx_status (latest_approval_status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+}
+
+async function ensureManualTableOperationLog() {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS manual_table_operation_log (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      table_name VARCHAR(128) NOT NULL,
+      action VARCHAR(32) NOT NULL,
+      operator_id INT NULL,
+      operator_name VARCHAR(64) NULL,
+      operator_role VARCHAR(32) NULL,
+      detail LONGTEXT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_table_name (table_name),
+      KEY idx_action (action),
+      KEY idx_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+}
+
 function isValidTableName(tableName: string) {
   return /^[a-zA-Z0-9_]+$/.test(tableName);
 }
@@ -109,6 +157,166 @@ function qTable(tableName: string) {
   return `\`${TARGET_DB}\`.\`${tableName}\``;
 }
 
+function generateApprovalNo() {
+  const d = new Date();
+  const datePart = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const timePart = `${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `APR${datePart}${timePart}${rand}`;
+}
+
+function escapeSqlComment(input: string) {
+  return String(input || '').replace(/'/g, "''").trim();
+}
+
+function normalizeColumnType(raw: string) {
+  const text = String(raw || '').trim().toUpperCase();
+  const m = text.match(/^([A-Z]+)(\((\d+)(,(\d+))?\))?$/);
+  if (!m) return null;
+  const base = m[1];
+  const allowed = new Set(['VARCHAR', 'INT', 'BIGINT', 'TINYINT', 'DECIMAL', 'DOUBLE', 'TEXT', 'LONGTEXT', 'DATE', 'DATETIME']);
+  if (!allowed.has(base)) return null;
+  if ((base === 'VARCHAR' || base === 'DECIMAL') && !m[2]) return null;
+  return text;
+}
+
+function buildTableCreatePreviewSql(tableName: string, tableComment: string, columns: any[]) {
+  const reserved = new Set(['id', 'batch_id', 'task_id', 'import_user', 'import_time', 'plan_version', 'is_valid', 'is_latest', 'source_row_no']);
+  const seen = new Set<string>();
+
+  const bizCols = columns.map((c: any) => {
+    const name = String(c.name || '').trim();
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(name)) {
+      throw new Error(`字段名不合法: ${name}`);
+    }
+    const lowered = name.toLowerCase();
+    if (reserved.has(lowered)) {
+      throw new Error(`字段名与系统字段冲突: ${name}`);
+    }
+    if (seen.has(lowered)) {
+      throw new Error(`字段名重复: ${name}`);
+    }
+    seen.add(lowered);
+
+    const columnType = normalizeColumnType(String(c.column_type || c.type || ''));
+    if (!columnType) {
+      throw new Error(`字段类型不支持: ${c.column_type || c.type || ''}`);
+    }
+    const nullable = Number(c.nullable ? 1 : 0) === 1 ? 'NULL' : 'NOT NULL';
+    const comment = escapeSqlComment(String(c.comment || ''));
+    return `\`${name}\` ${columnType} ${nullable}${comment ? ` COMMENT '${comment}'` : ''}`;
+  });
+
+  const tableCmt = escapeSqlComment(tableComment);
+  const ddl = `CREATE TABLE ${qTable(tableName)} (
+  \`id\` BIGINT NOT NULL AUTO_INCREMENT,
+  \`batch_id\` VARCHAR(64) NULL COMMENT '导入批次ID',
+  \`task_id\` VARCHAR(64) NULL COMMENT '导入任务ID',
+  \`import_user\` VARCHAR(64) NULL COMMENT '导入用户',
+  \`import_time\` DATETIME NULL COMMENT '导入时间',
+  \`plan_version\` INT NULL COMMENT '方案版本',
+  \`is_valid\` TINYINT NOT NULL DEFAULT 1 COMMENT '是否有效',
+  \`is_latest\` TINYINT NOT NULL DEFAULT 1 COMMENT '是否最新',
+  \`source_row_no\` INT NULL COMMENT '来源行号',
+  ${bizCols.join(',\n  ')},
+  PRIMARY KEY (\`id\`),
+  KEY \`idx_batch_id\` (\`batch_id\`),
+  KEY \`idx_task_id\` (\`task_id\`),
+  KEY \`idx_valid_latest\` (\`is_valid\`,\`is_latest\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCmt ? ` COMMENT='${tableCmt}'` : ''}`;
+
+  return ddl;
+}
+
+async function ensureApprovalRequestTypeSupportsTableCreate() {
+  const [rows]: any = await pool.query(
+    `SELECT COLUMN_TYPE
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'approval_request' AND COLUMN_NAME = 'approval_type'`
+  );
+  const colType = String(rows?.[0]?.COLUMN_TYPE || '');
+  if (!colType.includes("'TABLE_CREATE'")) {
+    await pool.query("ALTER TABLE approval_request MODIFY COLUMN approval_type ENUM('COMMIT','TABLE_CREATE') NOT NULL DEFAULT 'COMMIT'");
+  }
+}
+
+function getCandidateSchemas() {
+  const items = [TARGET_DB, process.env.DB_NAME, 'data_collection_target', 'data_collection_platform'];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    const v = String(it || '').trim();
+    if (!v || seen.has(v) || !isValidDbName(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+async function getUserDomains(userId: number): Promise<string[]> {
+  const [rows]: any = await pool.query('SELECT domain FROM sys_user_domain WHERE user_id = ? ORDER BY domain ASC', [userId]);
+  return (rows || []).map((r: any) => String(r.domain || '').trim()).filter(Boolean);
+}
+
+async function getTableDomainMap(tableNames: string[]) {
+  const names = Array.from(new Set((tableNames || []).map((n) => String(n || '').trim()).filter(Boolean)));
+  const out = new Map<string, string>();
+  if (!names.length) return out;
+
+  const placeholders = names.map(() => '?').join(', ');
+
+  try {
+    const [registryRows]: any = await pool.query(
+      `SELECT table_name, domain
+       FROM manual_table_registry
+       WHERE table_name IN (${placeholders})
+         AND domain IS NOT NULL AND domain <> ''
+       ORDER BY updated_at DESC, id DESC`,
+      names
+    );
+    for (const r of registryRows || []) {
+      const table = String(r.table_name || '').trim();
+      const domain = String(r.domain || '').trim();
+      if (!table || !domain || out.has(table)) continue;
+      out.set(table, domain);
+    }
+  } catch {
+    // compatible with environments where registry table is not initialized yet
+  }
+
+  const [configRows]: any = await pool.query(
+    `SELECT table_name, domain
+     FROM manual_table_approval_config
+     WHERE table_name IN (${placeholders})
+       AND domain IS NOT NULL AND domain <> ''
+     ORDER BY updated_at DESC, id DESC`,
+    names
+  );
+  for (const r of configRows || []) {
+    const table = String(r.table_name || '').trim();
+    const domain = String(r.domain || '').trim();
+    if (!table || !domain || out.has(table)) continue;
+    out.set(table, domain);
+  }
+
+  const [planRows]: any = await pool.query(
+    `SELECT target_table AS table_name, domain
+     FROM import_plan
+     WHERE target_table IN (${placeholders})
+       AND domain IS NOT NULL AND domain <> ''
+     ORDER BY updated_at DESC, created_at DESC, id DESC`,
+    names
+  );
+  for (const r of planRows || []) {
+    const table = String(r.table_name || '').trim();
+    const domain = String(r.domain || '').trim();
+    if (!table || !domain || out.has(table)) continue;
+    out.set(table, domain);
+  }
+
+  return out;
+}
+
 function safeParseJson<T = any>(v: any): T | null {
   if (v === null || v === undefined) return null;
   if (typeof v === 'object') return v as T;
@@ -118,6 +326,38 @@ function safeParseJson<T = any>(v: any): T | null {
   } catch {
     return null;
   }
+}
+
+function toCreateProgress(status: string, tableExists: boolean) {
+  const st = String(status || '').toUpperCase();
+  if (st === 'PENDING') {
+    return {
+      phase: 'WAIT_APPROVAL',
+      message: '已提交申请，等待审批中',
+    };
+  }
+  if (st === 'REJECTED') {
+    return {
+      phase: 'REJECTED',
+      message: '审批已驳回，未创建数据表',
+    };
+  }
+  if (st === 'APPROVED') {
+    if (tableExists) {
+      return {
+        phase: 'TABLE_CREATED',
+        message: '审批通过，数据表已创建',
+      };
+    }
+    return {
+      phase: 'APPROVED_PENDING_CREATE',
+      message: '审批已通过，正在确认建表结果',
+    };
+  }
+  return {
+    phase: 'UNKNOWN',
+    message: '状态未知',
+  };
 }
 
 function maskCell(value: any) {
@@ -367,18 +607,50 @@ async function ensureManualTable(tableName: string) {
 // GET /api/tables - 获取所有可用目标表
 router.get('/', async (req: Request, res: Response) => {
   try {
+    const authUser = (req as any).authUser as AuthUser;
+    const selectedDomain = String(req.query?.domain || '').trim();
     if (!isValidDbName(TARGET_DB)) {
       return res.status(500).json(errorResponse('目标库名配置非法'));
     }
-    const [tables]: any = await pool.query(
-      `SELECT t.TABLE_NAME, t.TABLE_COMMENT
-       FROM INFORMATION_SCHEMA.TABLES t
-       WHERE t.TABLE_SCHEMA = ?
-       ORDER BY t.TABLE_NAME`,
-      [TARGET_DB]
-    );
-    const targetTables = (tables || []).filter((t: any) => isBusinessTargetTable(String(t.TABLE_NAME || '')));
-    res.json(successResponse(targetTables));
+
+    let allowedDomains: string[] = [];
+    if (authUser.roleKey !== 'super_admin') {
+      allowedDomains = await getUserDomains(authUser.userId);
+      if (!allowedDomains.length) {
+        return res.json(successResponse([]));
+      }
+      if (selectedDomain && !allowedDomains.includes(selectedDomain)) {
+        return res.status(403).json(errorResponse('无权限查看该业务域目标表'));
+      }
+    }
+
+    let targetTables: any[] = [];
+    for (const schema of getCandidateSchemas()) {
+      const [tables]: any = await pool.query(
+        `SELECT t.TABLE_SCHEMA, t.TABLE_NAME, t.TABLE_COMMENT
+         FROM INFORMATION_SCHEMA.TABLES t
+         WHERE t.TABLE_SCHEMA = ?
+         ORDER BY t.TABLE_NAME`,
+        [schema]
+      );
+      const filtered = (tables || []).filter((t: any) => isBusinessTargetTable(String(t.TABLE_NAME || '')));
+      if (filtered.length > 0) {
+        targetTables = filtered;
+        break;
+      }
+    }
+
+    const tableNames = targetTables.map((t: any) => String(t.TABLE_NAME || '')).filter(Boolean);
+    const tableDomainMap = await getTableDomainMap(tableNames);
+
+    let filtered = targetTables;
+    if (selectedDomain) {
+      filtered = filtered.filter((t: any) => tableDomainMap.get(String(t.TABLE_NAME || '')) === selectedDomain);
+    } else if (authUser.roleKey !== 'super_admin') {
+      filtered = filtered.filter((t: any) => allowedDomains.includes(String(tableDomainMap.get(String(t.TABLE_NAME || '')) || '')));
+    }
+
+    res.json(successResponse(filtered));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
   }
@@ -387,15 +659,19 @@ router.get('/', async (req: Request, res: Response) => {
 // GET /api/tables/manual/overview - 手工数据表监控总览
 router.get('/manual/overview', async (req: Request, res: Response) => {
   try {
+    const authUser = (req as any).authUser as AuthUser;
     if (!isValidDbName(TARGET_DB)) {
       return res.status(500).json(errorResponse('目标库名配置非法'));
     }
     await ensureLifecycleTable();
     await ensureApprovalConfigTable();
 
-    const [rows]: any = await pool.query(
+    let rows: any[] = [];
+    for (const schema of getCandidateSchemas()) {
+      const [queryRows]: any = await pool.query(
       `SELECT
          t.TABLE_NAME,
+         t.TABLE_SCHEMA,
          t.TABLE_COMMENT,
          COALESCE(t.TABLE_ROWS, 0) AS row_count,
          COALESCE(t.DATA_LENGTH, 0) AS data_bytes,
@@ -431,12 +707,19 @@ router.get('/manual/overview', async (req: Request, res: Response) => {
        ) b ON b.target_table = t.TABLE_NAME
        WHERE t.TABLE_SCHEMA = ?
        ORDER BY (COALESCE(t.DATA_LENGTH, 0) + COALESCE(t.INDEX_LENGTH, 0)) DESC, t.TABLE_NAME ASC`
-    , [TARGET_DB]);
+      , [schema]);
 
-    const tables = rows
-      .filter((r: any) => isBusinessTargetTable(String(r.TABLE_NAME || '')))
+      const filtered = (queryRows || []).filter((r: any) => isBusinessTargetTable(String(r.TABLE_NAME || '')));
+      if (filtered.length > 0) {
+        rows = filtered;
+        break;
+      }
+    }
+
+    let tables = rows
       .map((r: any) => ({
       table_name: r.TABLE_NAME,
+      table_schema: r.TABLE_SCHEMA,
       table_comment: r.TABLE_COMMENT,
       row_count: Number(r.row_count || 0),
       data_bytes: Number(r.data_bytes || 0),
@@ -456,9 +739,285 @@ router.get('/manual/overview', async (req: Request, res: Response) => {
       latest_valid_batch_time: r.latest_valid_batch_time || null,
     }));
 
+    if (authUser.roleKey !== 'super_admin') {
+      const allowedDomains = await getUserDomains(authUser.userId);
+      if (!allowedDomains.length) {
+        return res.json(successResponse([]));
+      }
+      const tableDomainMap = await getTableDomainMap(tables.map((t: any) => String(t.table_name || '')).filter(Boolean));
+      tables = tables.filter((t: any) => {
+        const d = String(t.approval_domain || tableDomainMap.get(String(t.table_name || '')) || '');
+        return allowedDomains.includes(d);
+      });
+    }
+
     res.json(successResponse(tables));
   } catch (err: any) {
     res.status(500).json(errorResponse(err.message));
+  }
+});
+
+// POST /api/tables/manual/create-request - 发起手工建表审批申请
+router.post('/manual/create-request', async (req: Request, res: Response) => {
+  try {
+    await ensureApprovalRequestTypeSupportsTableCreate();
+    await ensureManualTableRegistry();
+    const authUser = (req as any).authUser as AuthUser;
+    const tableName = String(req.body?.table_name || '').trim();
+    const tableComment = String(req.body?.table_comment || '').trim();
+    const domain = String(req.body?.domain || '').trim();
+    const approverRole = String(req.body?.approver_role || 'domain_admin').trim() as 'super_admin' | 'domain_admin';
+    const approverUserId = req.body?.approver_user_id ? Number(req.body.approver_user_id) : null;
+    const columns = Array.isArray(req.body?.columns) ? req.body.columns : [];
+    const applicantName = String(req.body?.applicant_name || authUser?.username || '业务用户');
+
+    if (!authUser) {
+      return res.status(401).json(errorResponse('未登录或登录已过期'));
+    }
+    if (!isValidTableName(tableName)) {
+      return res.status(400).json(errorResponse('表名格式不合法，仅支持字母数字下划线'));
+    }
+    if (CORE_TABLES.has(tableName)) {
+      return res.status(400).json(errorResponse('系统内置表名不可使用'));
+    }
+    if (columns.length === 0) {
+      return res.status(400).json(errorResponse('请至少配置一个业务字段'));
+    }
+    if (approverRole !== 'super_admin' && approverRole !== 'domain_admin') {
+      return res.status(400).json(errorResponse('approver_role 仅支持 super_admin 或 domain_admin'));
+    }
+
+    const validDomains = await validateDomainNames([domain]);
+    if (!validDomains.length) {
+      return res.status(400).json(errorResponse('业务域未在元仓启用，请先维护业务域'));
+    }
+
+    if (authUser.roleKey === 'domain_admin') {
+      const [domainRows]: any = await pool.query('SELECT domain FROM sys_user_domain WHERE user_id = ?', [authUser.userId]);
+      const domains = domainRows.map((r: any) => String(r.domain));
+      if (!domains.includes(domain)) {
+        return res.status(403).json(errorResponse('域管理员仅可在其负责域发起建表申请'));
+      }
+    }
+
+    const [existsRows]: any = await pool.query(
+      `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+      [TARGET_DB, tableName]
+    );
+    if (existsRows.length > 0) {
+      return res.status(400).json(errorResponse('目标表已存在，请更换表名'));
+    }
+
+    const [pendingRows]: any = await pool.query(
+      `SELECT id, request_no, applicant_id, applicant_name, domain, snapshot, created_at
+       FROM approval_request
+       WHERE target_table = ?
+         AND status = 'PENDING'
+         AND (approval_type = 'TABLE_CREATE' OR (approval_type IS NULL AND task_id LIKE 'TABLE_CREATE_%'))
+       ORDER BY id DESC
+       LIMIT 1`,
+      [tableName]
+    );
+    if (pendingRows.length > 0) {
+      const pending = pendingRows[0];
+      const pendingSnapshot = safeParseJson<any>(pending.snapshot) || {};
+      const pendingColumns = Array.isArray(pendingSnapshot.columns) ? pendingSnapshot.columns : columns;
+      const pendingComment = String(pendingSnapshot.table_comment || tableComment || '').trim();
+      const pendingDdlPreview = String(pendingSnapshot.ddl_preview || '').trim();
+      await pool.query(
+        `INSERT INTO manual_table_registry
+          (table_name, table_comment, domain, create_request_id, create_request_no, latest_approval_status, creator_id, creator_name, biz_columns, ddl_preview)
+         VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           table_comment = VALUES(table_comment),
+           domain = VALUES(domain),
+           create_request_id = VALUES(create_request_id),
+           create_request_no = VALUES(create_request_no),
+           latest_approval_status = 'PENDING',
+           creator_id = VALUES(creator_id),
+           creator_name = VALUES(creator_name),
+           biz_columns = VALUES(biz_columns),
+           ddl_preview = VALUES(ddl_preview),
+           approved_at = NULL,
+           approved_by = NULL,
+           updated_at = NOW()`,
+        [
+          tableName,
+          pendingComment || null,
+          String(pending.domain || domain || ''),
+          Number(pending.id),
+          String(pending.request_no || ''),
+          Number(pending.applicant_id || authUser.userId || 0),
+          String(pending.applicant_name || applicantName || authUser.username || ''),
+          JSON.stringify(pendingColumns || []),
+          pendingDdlPreview || null,
+        ]
+      );
+      return res.status(400).json(errorResponse(`该表已存在待审批申请（单号：${pending.request_no || pending.id}），请勿重复提交`));
+    }
+
+    const ddlPreview = buildTableCreatePreviewSql(tableName, tableComment, columns);
+    const requestNo = generateApprovalNo();
+    const taskId = `TABLE_CREATE_${Date.now()}`;
+    const [insertRet]: any = await pool.query(
+      `INSERT INTO approval_request
+        (request_no, approval_type, task_id, target_table, domain, applicant_id, applicant_name, approver_role, approver_user_id, status, reason, snapshot)
+       VALUES (?, 'TABLE_CREATE', ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+      [
+        requestNo,
+        taskId,
+        tableName,
+        domain,
+        Number(authUser.userId || 0),
+        applicantName,
+        approverRole,
+        approverUserId,
+        `手工建表审批：${tableName}`,
+        JSON.stringify({
+          action: 'TABLE_CREATE',
+          table_name: tableName,
+          table_comment: tableComment,
+          domain,
+          columns,
+          ddl_preview: ddlPreview,
+          creator: {
+            user_id: Number(authUser.userId || 0),
+            username: authUser.username,
+          },
+        }),
+      ]
+    );
+
+    await pool.query(
+      'INSERT INTO approval_action (request_id, action, operator_id, operator_name, comment) VALUES (?, ?, ?, ?, ?)',
+      [Number(insertRet.insertId), 'CREATE', Number(authUser.userId || 0), applicantName, `发起建表审批：${tableName}`]
+    );
+
+    await pool.query(
+      `INSERT INTO manual_table_registry
+        (table_name, table_comment, domain, create_request_id, create_request_no, latest_approval_status, creator_id, creator_name, biz_columns, ddl_preview)
+       VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         table_comment = VALUES(table_comment),
+         domain = VALUES(domain),
+         create_request_id = VALUES(create_request_id),
+         create_request_no = VALUES(create_request_no),
+         latest_approval_status = 'PENDING',
+         creator_id = VALUES(creator_id),
+         creator_name = VALUES(creator_name),
+         biz_columns = VALUES(biz_columns),
+         ddl_preview = VALUES(ddl_preview),
+         approved_at = NULL,
+         approved_by = NULL,
+         updated_at = NOW()`,
+      [
+        tableName,
+        tableComment || null,
+        domain,
+        Number(insertRet.insertId),
+        requestNo,
+        Number(authUser.userId || 0),
+        applicantName,
+        JSON.stringify(columns || []),
+        ddlPreview,
+      ]
+    );
+
+    return res.json(successResponse({ request_no: requestNo, table_name: tableName }, '建表审批申请已提交'));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '建表审批申请失败'));
+  }
+});
+
+// GET /api/tables/manual/create-request/status - 查询手工建表审批进度与日志
+router.get('/manual/create-request/status', async (req: Request, res: Response) => {
+  try {
+    const authUser = (req as any).authUser as AuthUser;
+    if (!authUser) {
+      return res.status(401).json(errorResponse('未登录或登录已过期'));
+    }
+
+    const requestNo = String(req.query?.request_no || '').trim();
+    const tableName = String(req.query?.table_name || '').trim();
+    if (!requestNo && !tableName) {
+      return res.status(400).json(errorResponse('request_no 或 table_name 至少传一个'));
+    }
+
+    const where: string[] = ["(approval_type = 'TABLE_CREATE' OR (approval_type IS NULL AND task_id LIKE 'TABLE_CREATE_%'))"];
+    const params: any[] = [];
+    if (requestNo) {
+      where.push('request_no = ?');
+      params.push(requestNo);
+    }
+    if (tableName) {
+      if (!isValidTableName(tableName)) {
+        return res.status(400).json(errorResponse('table_name 格式不合法'));
+      }
+      where.push('target_table = ?');
+      params.push(tableName);
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT id, request_no, approval_type, task_id, target_table, domain, applicant_id, applicant_name,
+              approver_role, approver_user_id, status, reason, snapshot, decided_at, created_at, updated_at
+       FROM approval_request
+       WHERE ${where.join(' AND ')}
+       ORDER BY id DESC
+       LIMIT 1`,
+      params
+    );
+    if (!rows.length) {
+      return res.status(404).json(errorResponse('未找到对应建表申请'));
+    }
+
+    const row = rows[0];
+    if (authUser.roleKey !== 'super_admin' && Number(row.applicant_id || 0) !== Number(authUser.userId || 0)) {
+      return res.status(403).json(errorResponse('无权限查看该建表申请进度'));
+    }
+
+    const snapshot = safeParseJson<any>(row.snapshot) || {};
+    const finalTableName = String(row.target_table || snapshot.table_name || '').trim();
+
+    const [existsRows]: any = await pool.query(
+      'SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1',
+      [TARGET_DB, finalTableName]
+    );
+    const tableExists = existsRows.length > 0;
+
+    const [actionRows]: any = await pool.query(
+      `SELECT id, action, operator_id, operator_name, comment, created_at
+       FROM approval_action
+       WHERE request_id = ?
+       ORDER BY id ASC`,
+      [Number(row.id)]
+    );
+
+    const progress = toCreateProgress(String(row.status || ''), tableExists);
+
+    return res.json(successResponse({
+      request_id: Number(row.id),
+      request_no: String(row.request_no || ''),
+      table_name: finalTableName,
+      table_comment: String(snapshot.table_comment || ''),
+      domain: String(row.domain || snapshot.domain || ''),
+      status: String(row.status || ''),
+      reason: String(row.reason || ''),
+      decided_at: row.decided_at || null,
+      created_at: row.created_at || null,
+      updated_at: row.updated_at || null,
+      table_exists: tableExists,
+      progress,
+      actions: (actionRows || []).map((a: any) => ({
+        id: Number(a.id),
+        action: String(a.action || ''),
+        operator_id: Number(a.operator_id || 0),
+        operator_name: String(a.operator_name || ''),
+        comment: String(a.comment || ''),
+        created_at: a.created_at || null,
+      })),
+    }));
+  } catch (err: any) {
+    return res.status(500).json(errorResponse(err.message || '查询建表进度失败'));
   }
 });
 
@@ -734,16 +1293,83 @@ router.put('/:tableName/lifecycle', async (req: Request, res: Response) => {
 // DELETE /api/tables/:tableName - 删除手工数据表
 router.delete('/:tableName', async (req: Request, res: Response) => {
   try {
+    const authUser = (req as any).authUser as AuthUser;
+    if (!authUser || (authUser.roleKey !== 'super_admin' && authUser.roleKey !== 'domain_admin')) {
+      return res.status(403).json(errorResponse('仅超管或域管理员可删除手工数据表'));
+    }
+
     const { tableName } = req.params;
+    const reason = String(req.body?.reason || '').trim();
     if (!isValidDbName(TARGET_DB)) {
       return res.status(500).json(errorResponse('目标库名配置非法'));
     }
     await ensureLifecycleTable();
+    await ensureManualTableRegistry();
+    await ensureManualTableOperationLog();
     await ensureManualTable(tableName);
 
+    const [metaRows]: any = await pool.query(
+      `SELECT TABLE_NAME, TABLE_COMMENT, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH
+       FROM INFORMATION_SCHEMA.TABLES
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+       LIMIT 1`,
+      [TARGET_DB, tableName]
+    );
+    const meta = metaRows?.[0] || null;
+
     await pool.query(`DROP TABLE ${qTable(tableName)}`);
+
+    const [existsAfterRows]: any = await pool.query(
+      'SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1',
+      [TARGET_DB, tableName]
+    );
+    if (existsAfterRows.length > 0) {
+      return res.status(500).json(errorResponse(`删除失败：目标库 ${TARGET_DB} 中仍存在该表`));
+    }
+
     await pool.query('DELETE FROM manual_table_lifecycle WHERE table_name = ?', [tableName]);
+    await pool.query('DELETE FROM manual_table_approval_config WHERE table_name = ?', [tableName]);
     await pool.query('UPDATE import_batch SET is_valid = 0, is_latest = 0 WHERE target_table = ?', [tableName]);
+
+    await pool.query(
+      `INSERT INTO manual_table_operation_log
+        (table_name, action, operator_id, operator_name, operator_role, detail)
+       VALUES (?, 'DELETE_TABLE', ?, ?, ?, ?)`,
+      [
+        tableName,
+        Number(authUser.userId || 0),
+        String(authUser.username || ''),
+        String(authUser.roleKey || ''),
+        JSON.stringify({
+          target_db: TARGET_DB,
+          reason: reason || null,
+          deleted_at: new Date().toISOString(),
+          before_drop: {
+            table_comment: String(meta?.TABLE_COMMENT || ''),
+            table_rows: Number(meta?.TABLE_ROWS || 0),
+            data_length: Number(meta?.DATA_LENGTH || 0),
+            index_length: Number(meta?.INDEX_LENGTH || 0),
+          },
+        }),
+      ]
+    );
+
+    await pool.query(
+      `INSERT INTO audit_log (log_type, log_level, operator_id, operator_name, message, detail)
+       VALUES ('TABLE', 'WARN', ?, ?, ?, ?)`,
+      [
+        String(authUser.userId || ''),
+        String(authUser.username || ''),
+        `删除手工数据表：${tableName}`,
+        JSON.stringify({
+          action: 'DELETE_TABLE',
+          table_name: tableName,
+          target_db: TARGET_DB,
+          operator_role: authUser.roleKey,
+          reason: reason || null,
+        }),
+      ]
+    );
 
     res.json(successResponse({ table_name: tableName }, '数据表已删除'));
   } catch (err: any) {

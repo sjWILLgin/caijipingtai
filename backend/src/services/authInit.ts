@@ -1,10 +1,37 @@
 import pool from '../db';
 import bcrypt from 'bcryptjs';
-import { ANALYST_DEFAULT_PERMISSIONS } from './permissionMatrix';
+import { ANALYST_DEFAULT_PERMISSIONS, DOMAIN_ADMIN_DEFAULT_PERMISSIONS } from './permissionMatrix';
 import { ensureDomainTable } from './domainService';
+
+const DEFAULT_ROOT_INIT_PASSWORD = process.env.ROOT_INIT_PASSWORD || 'ChangeMe_please';
 
 export async function initAuthTables() {
   await ensureDomainTable();
+
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS audit_log (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      task_id VARCHAR(64) NULL,
+      batch_id VARCHAR(64) NULL,
+      log_type VARCHAR(32) NULL,
+      log_level VARCHAR(16) NULL,
+      operator_id VARCHAR(64) NULL,
+      operator_name VARCHAR(64) NULL,
+      message VARCHAR(500) NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_task_id (task_id),
+      KEY idx_batch_id (batch_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+
+  const [auditDetailColRows]: any = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_log' AND COLUMN_NAME = 'detail'`
+  );
+  if (!auditDetailColRows.length) {
+    await pool.query('ALTER TABLE audit_log ADD COLUMN detail LONGTEXT NULL AFTER message');
+  }
 
   await pool.query(
     `CREATE TABLE IF NOT EXISTS sys_user (
@@ -60,7 +87,7 @@ export async function initAuthTables() {
       ('analyst', '分析师')`
   );
 
-  const rootPasswordHash = await bcrypt.hash('zaowang123', 10);
+  const rootPasswordHash = await bcrypt.hash(DEFAULT_ROOT_INIT_PASSWORD, 10);
   await pool.query(
     `INSERT INTO sys_user (username, password_hash, display_name, is_active)
      VALUES ('root', ?, '系统超管', 1)
@@ -99,20 +126,22 @@ export async function initAuthTables() {
     );
   }
 
-  const [analystRows]: any = await pool.query(
-    `SELECT u.id
+  const [roleRows]: any = await pool.query(
+    `SELECT u.id, r.role_key
      FROM sys_user u
      JOIN sys_user_role ur ON ur.user_id = u.id
      JOIN sys_role r ON r.id = ur.role_id
-     WHERE r.role_key = 'analyst'`
+     WHERE r.role_key IN ('analyst', 'domain_admin')`
   );
 
-  for (const row of analystRows) {
+  for (const row of roleRows) {
     const userId = Number(row.id);
-    const [existingPermRows]: any = await pool.query('SELECT COUNT(*) AS c FROM sys_user_permission WHERE user_id = ?', [userId]);
-    if (Number(existingPermRows[0]?.c || 0) > 0) continue;
+    const roleKey = String(row.role_key || 'analyst');
+    const defaultPermissions = roleKey === 'domain_admin'
+      ? DOMAIN_ADMIN_DEFAULT_PERMISSIONS
+      : ANALYST_DEFAULT_PERMISSIONS;
 
-    for (const perm of ANALYST_DEFAULT_PERMISSIONS) {
+    for (const perm of defaultPermissions) {
       await pool.query('INSERT IGNORE INTO sys_user_permission (user_id, perm_key) VALUES (?, ?)', [userId, perm]);
     }
   }

@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { errorResponse } from '../utils';
 import { AuthUser, getUserPermissions } from './auth';
-import { PermissionKey } from '../services/permissionMatrix';
+import { mergeRoleDefaultPermissions, PermissionKey } from '../services/permissionMatrix';
 
 type Rule = {
   method: string;
@@ -38,6 +38,7 @@ const RULES: Rule[] = [
   { method: 'POST', path: /^\/commit\/batches\/[^/]+\/rollback$/, permission: 'commit.rollback' },
 
   { method: 'GET', path: /^\/tables$/, permission: 'table.view' },
+  { method: 'POST', path: /^\/tables\/manual\/create-request$/, permission: 'task.create' },
   { method: 'GET', path: /^\/tables\/manual\/overview$/, permission: 'table.view' },
   { method: 'GET', path: /^\/tables\/[^/]+\/(activities|columns|template|data)$/, permission: 'table.view' },
   { method: 'GET', path: /^\/tables\/[^/]+\/rule-state$/, permission: 'table.view' },
@@ -48,6 +49,7 @@ const RULES: Rule[] = [
   { method: 'DELETE', path: /^\/tables\/[^/]+$/, permission: 'table.delete' },
 
   { method: 'GET', path: /^\/dashboard\/stats$/, permission: 'dashboard.view' },
+  { method: 'GET', path: /^\/dashboard\/health$/, permission: 'dashboard.view' },
 
   { method: 'GET', path: /^\/logs\/[^/]+$/, permission: 'audit.view' },
   { method: 'GET', path: /^\/jobs(\/.*)?$/, permission: 'audit.view' },
@@ -91,7 +93,7 @@ export async function permissionGuard(req: Request, res: Response, next: NextFun
   }
 
   try {
-    const permissions = await getUserPermissions(authUser.userId);
+    const permissions = mergeRoleDefaultPermissions(authUser.roleKey, await getUserPermissions(authUser.userId));
     (req as any).authPermissions = permissions;
 
     if (!permissions.includes(requiredPermission)) {

@@ -78,6 +78,13 @@ const P02PlanForm: React.FC = () => {
   const selectedTargetTable = Form.useWatch('target_table', form);
   const selectedDomain = Form.useWatch('domain', form);
 
+  const loadTables = async (domain?: string) => {
+    const res: any = await tablesApi.list({ domain: String(domain || '').trim() || undefined });
+    const opts = (res.data || []).map((t: any) => ({ value: t.TABLE_NAME, label: t.TABLE_NAME }));
+    setTables(opts);
+    return opts;
+  };
+
   const fetchApprovalRule = async (targetTable?: string, domain?: string) => {
     const tableName = String(targetTable || '').trim();
     const reqId = ++approvalRuleReqSeq.current;
@@ -102,9 +109,7 @@ const P02PlanForm: React.FC = () => {
   };
 
   useEffect(() => {
-    tablesApi.list().then((res: any) => {
-      setTables((res.data || []).map((t: any) => ({ value: t.TABLE_NAME, label: t.TABLE_NAME })));
-    });
+    loadTables().catch(() => setTables([]));
     metaApi.listDomains().then((rows: any[]) => {
       const options = (rows || []).map((d: any) => ({ value: String(d.domain_name || ''), label: String(d.domain_name || '') })).filter((d: any) => !!d.value);
       setDomainOptions(options);
@@ -137,6 +142,16 @@ const P02PlanForm: React.FC = () => {
       });
     }
   }, [planId]);
+
+  useEffect(() => {
+    loadTables(selectedDomain).then((opts) => {
+      const currentTarget = String(form.getFieldValue('target_table') || '').trim();
+      if (!currentTarget) return;
+      if (!opts.some((o: any) => String(o.value) === currentTarget)) {
+        form.setFieldValue('target_table', undefined);
+      }
+    }).catch(() => setTables([]));
+  }, [selectedDomain]);
 
   useEffect(() => {
     fetchApprovalRule(selectedTargetTable, selectedDomain);

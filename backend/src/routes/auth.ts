@@ -3,18 +3,43 @@ import bcrypt from 'bcryptjs';
 import pool from '../db';
 import { errorResponse, successResponse } from '../utils';
 import { authRequired, requireRole, signAuthToken } from '../middleware/auth';
-import { ANALYST_DEFAULT_PERMISSIONS, DOMAIN_ADMIN_DEFAULT_PERMISSIONS, isValidPermissionKey, PERMISSION_MATRIX, PermissionKey } from '../services/permissionMatrix';
+import { ANALYST_DEFAULT_PERMISSIONS, DOMAIN_ADMIN_DEFAULT_PERMISSIONS, isValidPermissionKey, mergeRoleDefaultPermissions, PERMISSION_MATRIX, PermissionKey } from '../services/permissionMatrix';
 import { ensureDomainTable, syncDomainsFromData, validateDomainNames } from '../services/domainService';
 
 const router = Router();
 
+function getClientIp(req: Request) {
+  const xff = String(req.headers['x-forwarded-for'] || '').trim();
+  if (xff) {
+    const first = xff.split(',')[0]?.trim();
+    if (first) return first;
+  }
+  return req.ip || req.socket.remoteAddress || '';
+}
+
 async function getUserWithRoleByUsername(username: string) {
   const [rows]: any = await pool.query(
-    `SELECT u.id, u.username, u.display_name, u.is_active, r.role_key
+    `SELECT
+       u.id,
+       u.username,
+       u.display_name,
+       u.is_active,
+       CASE MAX(CASE r.role_key
+         WHEN 'super_admin' THEN 3
+         WHEN 'domain_admin' THEN 2
+         WHEN 'analyst' THEN 1
+         ELSE 0
+       END)
+         WHEN 3 THEN 'super_admin'
+         WHEN 2 THEN 'domain_admin'
+         WHEN 1 THEN 'analyst'
+         ELSE NULL
+       END AS role_key
      FROM sys_user u
      LEFT JOIN sys_user_role ur ON ur.user_id = u.id
      LEFT JOIN sys_role r ON r.id = ur.role_id
      WHERE u.username = ?
+     GROUP BY u.id, u.username, u.display_name, u.is_active
      LIMIT 1`,
     [username]
   );
@@ -23,11 +48,27 @@ async function getUserWithRoleByUsername(username: string) {
 
 async function getUserWithRoleById(userId: number) {
   const [rows]: any = await pool.query(
-    `SELECT u.id, u.username, u.display_name, u.is_active, r.role_key
+    `SELECT
+       u.id,
+       u.username,
+       u.display_name,
+       u.is_active,
+       CASE MAX(CASE r.role_key
+         WHEN 'super_admin' THEN 3
+         WHEN 'domain_admin' THEN 2
+         WHEN 'analyst' THEN 1
+         ELSE 0
+       END)
+         WHEN 3 THEN 'super_admin'
+         WHEN 2 THEN 'domain_admin'
+         WHEN 1 THEN 'analyst'
+         ELSE NULL
+       END AS role_key
      FROM sys_user u
      LEFT JOIN sys_user_role ur ON ur.user_id = u.id
      LEFT JOIN sys_role r ON r.id = ur.role_id
      WHERE u.id = ?
+     GROUP BY u.id, u.username, u.display_name, u.is_active
      LIMIT 1`,
     [userId]
   );
@@ -37,6 +78,10 @@ async function getUserWithRoleById(userId: number) {
 async function getUserPermissionsById(userId: number): Promise<PermissionKey[]> {
   const [rows]: any = await pool.query('SELECT perm_key FROM sys_user_permission WHERE user_id = ? ORDER BY perm_key ASC', [userId]);
   return rows.map((r: any) => r.perm_key as PermissionKey);
+}
+
+async function getEffectiveUserPermissions(userId: number, roleKey: 'super_admin' | 'domain_admin' | 'analyst'): Promise<PermissionKey[]> {
+  return mergeRoleDefaultPermissions(roleKey, await getUserPermissionsById(userId));
 }
 
 async function bindUserRole(userId: number, roleKey: 'super_admin' | 'domain_admin' | 'analyst') {
@@ -60,11 +105,11 @@ router.post('/register', async (req: Request, res: Response) => {
     const { username, password, display_name } = req.body || {};
 
     if (!username || !password || !display_name) {
-      return res.status(400).json(errorResponse('请填写用户名、密码和显示名'));
+      return res.status(400).json(errorResponse('请填写工号、密码和姓名'));
     }
 
     if (!/^[a-zA-Z0-9_]{4,32}$/.test(username)) {
-      return res.status(400).json(errorResponse('用户名需为4-32位字母数字下划线'));
+      return res.status(400).json(errorResponse('工号需为4-32位字母数字下划线'));
     }
 
     if (String(password).length < 6) {
@@ -73,7 +118,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
     const existing = await getUserWithRoleByUsername(username);
     if (existing) {
-      return res.status(400).json(errorResponse('用户名已存在'));
+      return res.status(400).json(errorResponse('工号已存在'));
     }
 
     const roleKey: 'super_admin' | 'domain_admin' | 'analyst' = 'analyst';
@@ -91,8 +136,33 @@ router.post('/register', async (req: Request, res: Response) => {
     }
 
     const user = await getUserWithRoleById(userId);
+
+    // Best-effort security audit for account creation. Do not block registration if logging fails.
+    try {
+      await pool.query(
+        `INSERT INTO audit_log (log_type, log_level, operator_id, operator_name, message, detail)
+         VALUES ('SYSTEM', 'WARN', ?, ?, ?, ?)`,
+        [
+          String(user.id),
+          String(user.display_name || user.username),
+          `账号注册：${user.username}（${user.display_name}）`,
+          JSON.stringify({
+            action: 'REGISTER_USER',
+            user_id: user.id,
+            username: user.username,
+            display_name: user.display_name,
+            role_key: user.role_key || 'analyst',
+            source_ip: getClientIp(req),
+            user_agent: String(req.headers['user-agent'] || ''),
+          }),
+        ]
+      );
+    } catch (logErr: any) {
+      console.warn('注册审计日志写入失败:', logErr?.message || logErr);
+    }
+
     const token = signAuthToken({ userId, username: user.username, roleKey: user.role_key });
-    const permissions = user.role_key === 'super_admin' ? PERMISSION_MATRIX.map((p) => p.key) : await getUserPermissionsById(userId);
+    const permissions = await getEffectiveUserPermissions(userId, user.role_key || 'analyst');
 
     return res.json(
       successResponse(
@@ -110,6 +180,9 @@ router.post('/register', async (req: Request, res: Response) => {
       )
     );
   } catch (err: any) {
+    if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      return res.status(400).json(errorResponse('工号已存在'));
+    }
     return res.status(500).json(errorResponse(err.message || '注册失败'));
   }
 });
@@ -118,21 +191,38 @@ router.post('/login', async (req: Request, res: Response) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
-      return res.status(400).json(errorResponse('请输入用户名和密码'));
+      return res.status(400).json(errorResponse('请输入工号和密码'));
     }
 
     const [rows]: any = await pool.query(
-      `SELECT u.id, u.username, u.password_hash, u.display_name, u.is_active, r.role_key
+      `SELECT
+         u.id,
+         u.username,
+         u.password_hash,
+         u.display_name,
+         u.is_active,
+         CASE MAX(CASE r.role_key
+           WHEN 'super_admin' THEN 3
+           WHEN 'domain_admin' THEN 2
+           WHEN 'analyst' THEN 1
+           ELSE 0
+         END)
+           WHEN 3 THEN 'super_admin'
+           WHEN 2 THEN 'domain_admin'
+           WHEN 1 THEN 'analyst'
+           ELSE NULL
+         END AS role_key
        FROM sys_user u
        LEFT JOIN sys_user_role ur ON ur.user_id = u.id
        LEFT JOIN sys_role r ON r.id = ur.role_id
        WHERE u.username = ?
+       GROUP BY u.id, u.username, u.password_hash, u.display_name, u.is_active
        LIMIT 1`,
       [username]
     );
 
     if (!rows.length) {
-      return res.status(401).json(errorResponse('用户名或密码错误'));
+      return res.status(401).json(errorResponse('工号或密码错误'));
     }
 
     const user = rows[0];
@@ -142,12 +232,12 @@ router.post('/login', async (req: Request, res: Response) => {
 
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) {
-      return res.status(401).json(errorResponse('用户名或密码错误'));
+      return res.status(401).json(errorResponse('工号或密码错误'));
     }
 
     const roleKey = (user.role_key || 'analyst') as 'super_admin' | 'domain_admin' | 'analyst';
     const token = signAuthToken({ userId: user.id, username: user.username, roleKey });
-    const permissions = roleKey === 'super_admin' ? PERMISSION_MATRIX.map((p) => p.key) : await getUserPermissionsById(user.id);
+    const permissions = await getEffectiveUserPermissions(user.id, roleKey);
 
     return res.json(
       successResponse({
@@ -173,7 +263,7 @@ router.get('/me', authRequired, async (req: Request, res: Response) => {
     if (!user) {
       return res.status(404).json(errorResponse('用户不存在'));
     }
-    const permissions = user.role_key === 'super_admin' ? PERMISSION_MATRIX.map((p) => p.key) : await getUserPermissionsById(user.id);
+    const permissions = await getEffectiveUserPermissions(user.id, user.role_key || 'analyst');
     return res.json(
       successResponse({
         id: user.id,
@@ -191,10 +281,27 @@ router.get('/me', authRequired, async (req: Request, res: Response) => {
 router.get('/users', authRequired, requireRole('super_admin'), async (_req: Request, res: Response) => {
   try {
     const [rows]: any = await pool.query(
-      `SELECT u.id, u.username, u.display_name, u.is_active, r.role_key, u.created_at
+      `SELECT
+         u.id,
+         u.username,
+         u.display_name,
+         u.is_active,
+         CASE MAX(CASE r.role_key
+           WHEN 'super_admin' THEN 3
+           WHEN 'domain_admin' THEN 2
+           WHEN 'analyst' THEN 1
+           ELSE 0
+         END)
+           WHEN 3 THEN 'super_admin'
+           WHEN 2 THEN 'domain_admin'
+           WHEN 1 THEN 'analyst'
+           ELSE NULL
+         END AS role_key,
+         u.created_at
        FROM sys_user u
        LEFT JOIN sys_user_role ur ON ur.user_id = u.id
        LEFT JOIN sys_role r ON r.id = ur.role_id
+       GROUP BY u.id, u.username, u.display_name, u.is_active, u.created_at
        ORDER BY u.id ASC`
     );
     return res.json(successResponse(rows));
@@ -266,8 +373,8 @@ router.get('/operation-center', authRequired, requireRole('super_admin'), async 
     const params: any[] = [date];
 
     if (operator) {
-      where.push('(operator_name LIKE ? OR operator_id LIKE ?)');
-      params.push(`%${operator}%`, `%${operator}%`);
+      where.push('(operator_name LIKE ? OR operator_id LIKE ? OR message LIKE ? OR detail LIKE ?)');
+      params.push(`%${operator}%`, `%${operator}%`, `%${operator}%`, `%${operator}%`);
     }
 
     if (logType) {
@@ -342,7 +449,7 @@ router.put('/users/:userId/role', authRequired, requireRole('super_admin'), asyn
 
     if (targetCurrentRole === 'super_admin' && role_key !== 'super_admin') {
       const [countRows]: any = await pool.query(
-        `SELECT COUNT(*) AS c
+        `SELECT COUNT(DISTINCT u.id) AS c
          FROM sys_user u
          JOIN sys_user_role ur ON ur.user_id = u.id
          JOIN sys_role r ON r.id = ur.role_id
@@ -399,7 +506,7 @@ router.get('/users/:userId/permissions', authRequired, requireRole('super_admin'
       return res.status(404).json(errorResponse('用户不存在'));
     }
 
-    const permissions = user.role_key === 'super_admin' ? PERMISSION_MATRIX.map((p) => p.key) : await getUserPermissionsById(userId);
+    const permissions = await getEffectiveUserPermissions(userId, user.role_key || 'analyst');
     return res.json(successResponse({ user_id: userId, role_key: user.role_key, permissions }));
   } catch (err: any) {
     return res.status(500).json(errorResponse(err.message || '获取用户权限失败'));
@@ -430,7 +537,7 @@ router.put('/users/:userId/permissions', authRequired, requireRole('super_admin'
     }
 
     await replaceUserPermissions(userId, uniquePermissions as PermissionKey[]);
-    const permissions = await getUserPermissionsById(userId);
+    const permissions = await getEffectiveUserPermissions(userId, user.role_key || 'analyst');
     return res.json(successResponse({ user_id: userId, role_key: user.role_key, permissions }, '权限更新成功'));
   } catch (err: any) {
     return res.status(500).json(errorResponse(err.message || '更新用户权限失败'));

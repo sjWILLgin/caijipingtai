@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout as AntLayout, Menu, Typography, Breadcrumb, Steps, Tag, Button, Space, Modal, Form, Input, message, Dropdown, Avatar } from 'antd';
-import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined, UserOutlined, DownOutlined, LogoutOutlined, LockOutlined, BellOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileTextOutlined, HistoryOutlined, TableOutlined, HomeOutlined, UserOutlined, DownOutlined, LogoutOutlined, LockOutlined, BellOutlined, AreaChartOutlined } from '@ant-design/icons';
 import { authApi } from '../services/api';
 
 const { Header, Sider, Content } = AntLayout;
@@ -25,9 +25,11 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
 
   const getSelectedKey = () => {
     if (location.pathname === '/home' || location.pathname === '/') return 'home';
+    if (location.pathname.startsWith('/data-health')) return 'data-health';
     if (location.pathname.startsWith('/import-plans')) return 'plans';
     if (location.pathname.startsWith('/import-tasks')) return 'tasks';
     if (location.pathname.startsWith('/manual-tables')) return 'manual-tables';
+    if (location.pathname.startsWith('/template-create')) return 'template-create';
     if (location.pathname.startsWith('/user-admin')) return 'user-admin';
     if (location.pathname.startsWith('/ops-center')) return 'ops-center';
     if (location.pathname.startsWith('/approval-center')) return 'approval-center';
@@ -39,6 +41,7 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
   const getBreadcrumbItems = () => {
     const p = location.pathname;
     if (p === '/home' || p === '/') return [{ title: '首页' }, { title: '操作导览' }];
+    if (p === '/data-health') return [{ title: '数据治理' }, { title: '数据健康度' }];
     if (p === '/import-plans') return [{ title: '导入方案' }, { title: '方案列表' }];
     if (p === '/import-plans/new') return [{ title: '导入方案' }, { title: '新建方案' }];
     if (p.includes('/import-plans/') && p.includes('/edit')) return [{ title: '导入方案' }, { title: '编辑方案' }];
@@ -50,6 +53,7 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
     if (p.includes('/commit-confirm')) return [{ title: '任务记录' }, { title: '提交确认' }];
     if (/\/import-tasks\/[^/]+$/.test(p)) return [{ title: '任务记录' }, { title: '任务详情' }];
     if (p === '/manual-tables') return [{ title: '运维监控' }, { title: '手工数据表清单' }];
+    if (p === '/template-create') return [{ title: '手工数据表' }, { title: '模板创建' }];
     if (p === '/user-admin') return [{ title: '系统管理' }, { title: '用户权限' }];
     if (p === '/ops-center') return [{ title: '系统管理' }, { title: '信息中心' }];
     if (p === '/approval-center') return [{ title: '系统管理' }, { title: '审批中心' }];
@@ -155,6 +159,12 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
                 onClick: () => navigate('/home'),
               },
               {
+                key: 'data-health',
+                icon: <AreaChartOutlined />,
+                label: '数据健康度',
+                onClick: () => navigate('/data-health'),
+              },
+              {
                 key: 'plans',
                 icon: <FileTextOutlined />,
                 label: '导入方案',
@@ -171,6 +181,12 @@ const Layout: React.FC<Props> = ({ currentUser, onLogout }) => {
                 icon: <TableOutlined />,
                 label: '手工数据表',
                 onClick: () => navigate('/manual-tables'),
+              },
+              {
+                key: 'template-create',
+                icon: <FileTextOutlined />,
+                label: '模板创建',
+                onClick: () => navigate('/template-create'),
               },
               ...((currentUser.role_key === 'super_admin' || currentUser.role_key === 'domain_admin')
                 ? [

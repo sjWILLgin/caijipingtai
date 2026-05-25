@@ -5,7 +5,7 @@ import pool from '../db';
 const NUMERIC_TYPES = new Set(['tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint', 'decimal', 'float', 'double']);
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp']);
 const META_DB = process.env.META_DB_NAME || 'data_collection_meta';
-const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
+const TARGET_DB = process.env.TARGET_DB_NAME || 'data_collection_target';
 const IMPORT_CHUNK_SIZE = Math.max(100, Number(process.env.IMPORT_CHUNK_SIZE || 1000));
 const MAX_COMMIT_ROWS = Number(process.env.IMPORT_MAX_ROWS || 200000);
 const MAX_TARGET_ROWS = Number(process.env.IMPORT_MAX_TARGET_ROWS || 5000000);
@@ -56,7 +56,7 @@ async function ensureMetaStore() {
       target_table VARCHAR(128) NOT NULL,
       write_mode VARCHAR(32) NOT NULL,
       snapshot_table VARCHAR(128) NOT NULL,
-      snapshot_scope JSON NULL,
+      snapshot_scope LONGTEXT NULL,
       row_count INT DEFAULT 0,
       status ENUM('CREATED','RESTORED','FAILED') DEFAULT 'CREATED',
       error_message TEXT NULL,
@@ -201,6 +201,7 @@ export async function commitData(
     let processedRows = 0;
     const snapshotModes = new Set(['FULL_OVERWRITE', 'PARTITION_OVERWRITE', 'UPSERT']);
     const snappedTables = new Set<string>();
+    const fullOverwrittenTables = new Set<string>();
 
     for (const sheet of sheets) {
       const targetTable = sheet.target_table;
@@ -247,6 +248,16 @@ export async function commitData(
       }
 
       await checkTargetTableCapacity(targetTable, sheetDataRows, write_mode);
+
+      // Handle write mode: full overwrite (clear target table before inserting new rows)
+      if (write_mode === 'FULL_OVERWRITE' && !fullOverwrittenTables.has(targetTable)) {
+        await pool.query(
+          `UPDATE import_batch SET is_valid = 0, is_latest = 0 WHERE target_table = ? AND is_valid = 1 AND task_id != ?`,
+          [targetTable, task_id]
+        );
+        await pool.query(`DELETE FROM ${qTargetTable(targetTable)}`);
+        fullOverwrittenTables.add(targetTable);
+      }
 
       // Handle write mode: partition overwrite
       if (write_mode === 'PARTITION_OVERWRITE' && write_scope) {
@@ -343,14 +354,26 @@ export async function commitData(
     }
 
     const failedCount = Math.max(totalRows - totalInserted, 0);
+    const hasDuplicateKeyError = failedRows.some((line) => /Duplicate entry .* for key/i.test(line));
     const status = totalInserted > 0 ? 'SUCCESS' : 'COMMIT_FAILED';
+    const duplicateHint = (write_mode === 'APPEND' && hasDuplicateKeyError)
+      ? '检测到唯一键冲突，请改用 UPSERT（主键更新）模式重试。'
+      : '';
     const summary = status === 'SUCCESS'
       ? `入库完成，成功 ${totalInserted} 行，失败 ${failedCount} 行，批次号：${batch_id}`
       : `入库失败，成功 0 行，失败 ${failedCount} 行`;
 
     await pool.query(
       "UPDATE import_task SET status = ?, current_step = 'COMMIT', total_count = ?, success_count = ?, error_message = ?, updated_at = NOW() WHERE task_id = ?",
-      [status, totalRows, totalInserted, failedCount > 0 ? failedRows.slice(0, 3).join(' | ') : null, task_id]
+      [
+        status,
+        totalRows,
+        totalInserted,
+        failedCount > 0
+          ? `${duplicateHint}${failedRows.slice(0, 3).join(' | ')}`
+          : null,
+        task_id,
+      ]
     );
 
     await pool.query(

@@ -19,6 +19,8 @@ import P12OperationCenter from './pages/P12OperationCenter';
 import P13ApprovalCenter from './pages/P13ApprovalCenter';
 import P14ApprovalFlowTemplates from './pages/P14ApprovalFlowTemplates';
 import P15DataMaintenance from './pages/P15DataMaintenance';
+import P16TemplateCreate from './pages/P16TemplateCreate';
+import P17DataHealth from './pages/P17DataHealth';
 import P99Auth from './pages/P99Auth';
 import { authApi } from './services/api';
 
@@ -93,11 +95,13 @@ const App: React.FC = () => {
               >
                 <Route index element={<Navigate to="/home" replace />} />
                 <Route path="home" element={<P00Home />} />
+                <Route path="data-health" element={<P17DataHealth />} />
                 <Route path="import-plans" element={<P01PlanList />} />
                 <Route path="import-plans/new" element={<P02PlanForm />} />
                 <Route path="import-plans/:planId/edit" element={<P02PlanForm />} />
                 <Route path="import-tasks" element={<P09TaskList />} />
                 <Route path="manual-tables" element={<P10ManualTables />} />
+                <Route path="template-create" element={<P16TemplateCreate />} />
                 <Route path="import-tasks/:taskId/upload" element={<P03Upload />} />
                 <Route path="import-tasks/:taskId/sheets" element={<P04Sheets />} />
                 <Route path="import-tasks/:taskId/mapping" element={<P05Mapping />} />

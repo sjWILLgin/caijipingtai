@@ -8,6 +8,7 @@ import { resolveApprovalRuleFromMeta } from '../services/approvalRuleResolverSer
 
 const router = Router();
 const META_DB = process.env.META_DB_NAME || 'data_collection_meta';
+const TARGET_DB = process.env.TARGET_DB_NAME || 'data_collection_target';
 
 function generateApprovalNo() {
   const d = new Date();
@@ -21,8 +22,15 @@ function isSafeIdentifier(name: string) {
   return /^[a-zA-Z0-9_]+$/.test(name);
 }
 
+function qTargetTable(tableName: string) {
+  if (!isSafeIdentifier(TARGET_DB) || !isSafeIdentifier(tableName)) {
+    throw new Error('目标库或表名非法');
+  }
+  return `\`${TARGET_DB}\`.\`${tableName}\``;
+}
+
 async function restoreFromSnapshot(targetTable: string, snapshotTable: string) {
-  if (!isSafeIdentifier(targetTable) || !isSafeIdentifier(snapshotTable) || !isSafeIdentifier(META_DB)) {
+  if (!isSafeIdentifier(targetTable) || !isSafeIdentifier(snapshotTable) || !isSafeIdentifier(META_DB) || !isSafeIdentifier(TARGET_DB)) {
     throw new Error('快照恢复对象名非法');
   }
 
@@ -39,17 +47,17 @@ async function restoreFromSnapshot(targetTable: string, snapshotTable: string) {
   const [columnRows]: any = await pool.query(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
      ORDER BY ORDINAL_POSITION`,
-    [targetTable]
+    [TARGET_DB, targetTable]
   );
   if (!columnRows.length) {
     throw new Error('目标表不存在或无字段');
   }
 
   const cols = columnRows.map((r: any) => `\`${r.COLUMN_NAME}\``).join(', ');
-  await pool.query(`DELETE FROM \`${targetTable}\``);
-  await pool.query(`INSERT INTO \`${targetTable}\` (${cols}) SELECT ${cols} FROM \`${META_DB}\`.\`${snapshotTable}\``);
+  await pool.query(`DELETE FROM ${qTargetTable(targetTable)}`);
+  await pool.query(`INSERT INTO ${qTargetTable(targetTable)} (${cols}) SELECT ${cols} FROM \`${META_DB}\`.\`${snapshotTable}\``);
 }
 
 // POST /api/commit/:taskId - 提交入库
@@ -58,6 +66,14 @@ router.post('/:taskId', async (req: Request, res: Response) => {
     const authUser = (req as any).authUser;
     const { taskId } = req.params;
     const { write_mode = 'APPEND', write_scope, warning_confirmed = false, operator_id, operator_name } = req.body;
+    const normalizedWriteMode = String(write_mode || 'APPEND').toUpperCase();
+    const allowedWriteModes = new Set(['APPEND', 'FULL_OVERWRITE', 'PARTITION_OVERWRITE', 'UPSERT']);
+    if (!allowedWriteModes.has(normalizedWriteMode)) {
+      return res.status(400).json(errorResponse(`不支持的入库方式: ${write_mode}`));
+    }
+    if (normalizedWriteMode === 'PARTITION_OVERWRITE' && (!write_scope || Object.keys(write_scope || {}).length === 0)) {
+      return res.status(400).json(errorResponse('PARTITION_SCOPE_REQUIRED: 分区覆盖必须提供 write_scope，当前版本请改用 FULL_OVERWRITE 或 UPSERT。'));
+    }
 
     const finalOperatorId = operator_id || String(authUser?.userId || 'user01');
     const finalOperatorName = operator_name || String(authUser?.username || '业务用户');
@@ -66,8 +82,8 @@ router.post('/:taskId', async (req: Request, res: Response) => {
     if (!taskRows.length) return res.status(404).json(errorResponse('任务不存在'));
 
     const task = taskRows[0];
-    if (task.status !== 'READY' && task.status !== 'VALIDATE_SUCCESS') {
-      return res.status(400).json(errorResponse(`当前状态 ${task.status} 不允许提交入库`));
+    if (task.status !== 'READY' && task.status !== 'VALIDATE_SUCCESS' && task.status !== 'COMMIT_FAILED') {
+      return res.status(400).json(errorResponse(`当前状态 ${task.status} 不允许提交入库（仅支持 READY / VALIDATE_SUCCESS / COMMIT_FAILED）`));
     }
 
     if (task.blocking_error_count > 0) {
@@ -121,7 +137,7 @@ router.post('/:taskId', async (req: Request, res: Response) => {
               task_id: taskId,
               plan_name: plan.plan_name || null,
               target_table: targetTable || null,
-              write_mode,
+              write_mode: normalizedWriteMode,
               success_count: Number(task.success_count || 0),
             },
           });
@@ -171,7 +187,7 @@ router.post('/:taskId', async (req: Request, res: Response) => {
               task_id: taskId,
               plan_name: plan.plan_name || null,
               target_table: targetTable || null,
-              write_mode,
+              write_mode: normalizedWriteMode,
               success_count: Number(task.success_count || 0),
             }),
           ]
@@ -212,7 +228,7 @@ router.post('/:taskId', async (req: Request, res: Response) => {
     const batch_id = generateBatchId();
 
     const job = await enqueueJob(taskId, 'COMMIT', async () => {
-      await commitData(taskId, batch_id, write_mode, write_scope, finalOperatorId, finalOperatorName);
+      await commitData(taskId, batch_id, normalizedWriteMode, write_scope, finalOperatorId, finalOperatorName);
       return { task_id: taskId, batch_id, stage: 'COMMIT' };
     });
 
@@ -280,14 +296,14 @@ router.post('/batches/:batchId/rollback', async (req: Request, res: Response) =>
       try {
         if (batch.write_mode === 'FULL_OVERWRITE') {
           // User requirement: full overwrite rollback should clear table.
-          await pool.query(`DELETE FROM \`${batch.target_table}\``);
+          await pool.query(`DELETE FROM ${qTargetTable(batch.target_table)}`);
           await pool.query(
             'UPDATE import_batch SET is_valid = 0, is_latest = 0 WHERE target_table = ?',
             [batch.target_table]
           );
         } else {
           await pool.query(
-            `DELETE FROM \`${batch.target_table}\` WHERE batch_id = ?`,
+            `DELETE FROM ${qTargetTable(batch.target_table)} WHERE batch_id = ?`,
             [batchId]
           );
 
@@ -306,7 +322,7 @@ router.post('/batches/:batchId/rollback', async (req: Request, res: Response) =>
                 [prevBatchId]
               );
               await pool.query(
-                `UPDATE \`${batch.target_table}\` SET is_valid = 1, is_latest = 1 WHERE batch_id = ?`,
+                `UPDATE ${qTargetTable(batch.target_table)} SET is_valid = 1, is_latest = 1 WHERE batch_id = ?`,
                 [prevBatchId]
               );
             }

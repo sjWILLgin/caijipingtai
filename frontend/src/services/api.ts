@@ -129,7 +129,17 @@ export const logsApi = {
 
 // Tables API
 export const tablesApi = {
-  list: () => api.get('/tables'),
+  list: (params?: { domain?: string }) => api.get('/tables', { params }),
+  createManualTableRequest: (data: {
+    table_name: string;
+    table_comment?: string;
+    domain: string;
+    approver_role: 'super_admin' | 'domain_admin';
+    approver_user_id?: number | null;
+    columns: Array<{ name: string; column_type: string; nullable?: number; comment?: string }>;
+  }) => api.post('/tables/manual/create-request', data),
+  getManualCreateRequestStatus: (params: { request_no?: string; table_name?: string }) =>
+    api.get('/tables/manual/create-request/status', { params }),
   getManualOverview: () => api.get('/tables/manual/overview'),
   getApprovalConfig: (tableName: string) => api.get(`/tables/${encodeURIComponent(tableName)}/approval-config`),
   updateApprovalConfig: (
@@ -149,7 +159,8 @@ export const tablesApi = {
   },
   updateLifecycle: (tableName: string, data: { lifecycle_enabled: number; lifecycle_days: number; cleanup_strategy: 'DELETE_ROWS' | 'DROP_TABLE' }) =>
     api.put(`/tables/${encodeURIComponent(tableName)}/lifecycle`, data),
-  removeTable: (tableName: string) => api.delete(`/tables/${encodeURIComponent(tableName)}`),
+  removeTable: (tableName: string, reason?: string) =>
+    api.delete(`/tables/${encodeURIComponent(tableName)}`, { data: { reason: String(reason || '').trim() || null } }),
   getColumns: (tableName: string) => api.get(`/tables/${tableName}/columns`),
   getData: (tableName: string, params?: any) => api.get(`/tables/${tableName}/data`, { params }),
   downloadTemplate: (tableName: string) => withToken(`/api/tables/${encodeURIComponent(tableName)}/template`),
@@ -188,4 +199,5 @@ export const metaApi = {
 // Dashboard API
 export const dashboardApi = {
   getStats: () => api.get('/dashboard/stats').then((res: any) => res.data),
+  getHealth: () => api.get('/dashboard/health').then((res: any) => res.data),
 };

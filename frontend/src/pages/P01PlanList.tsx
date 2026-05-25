@@ -24,7 +24,7 @@ const P01PlanList: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ACTIVE');
+  const [statusFilter, setStatusFilter] = useState('');
   const [page, setPage] = useState(1);
 
   const fetchPlans = async () => {
@@ -79,6 +79,11 @@ const P01PlanList: React.FC = () => {
   };
 
   const handleDeletePlan = (plan: any) => {
+    if (plan.status === 'ACTIVE') {
+      message.warning('请先停用方案，再执行删除');
+      return;
+    }
+
     Modal.confirm({
       title: '删除导入方案',
       content: `确认删除方案 "${plan.plan_name}"？删除后不可恢复。`,
@@ -132,6 +137,7 @@ const P01PlanList: React.FC = () => {
             size="small"
             danger
             icon={<DeleteOutlined />}
+            disabled={record.status === 'ACTIVE'}
             onClick={() => handleDeletePlan(record)}
           >删除</Button>
         </Space>

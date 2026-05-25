@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Card, Col, Row, Typography, Tag, Spin } from 'antd';
-import { CheckCircleOutlined, RocketOutlined, SafetyCertificateOutlined, ThunderboltOutlined, DatabaseOutlined, AlertOutlined, LineChartOutlined } from '@ant-design/icons';
+import { Button, Card, Col, Row, Typography, Tag, Spin } from 'antd';
+import { CheckCircleOutlined, RocketOutlined, SafetyCertificateOutlined, ThunderboltOutlined, DatabaseOutlined, AlertOutlined, LineChartOutlined, AreaChartOutlined } from '@ant-design/icons';
 import { dashboardApi } from '../services/api';
+import { useNavigate } from 'react-router-dom';
 
 const flowSteps = [
   { key: '01', title: '创建导入方案', desc: '选择业务域，定义导入目标与策略。' },
@@ -39,6 +40,7 @@ const highlights = [
 ];
 
 const P00Home: React.FC = () => {
+  const navigate = useNavigate();
   const [activeStep, setActiveStep] = useState(0);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const contentRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -190,6 +192,12 @@ const P00Home: React.FC = () => {
           <Typography.Title level={4} style={{ marginBottom: 16, color: '#0f172a' }}>
             平台运营一览
           </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            首页仅展示核心指标，域级明细与容量明细请进入“数据健康度”查看。
+          </Typography.Paragraph>
+          <Button icon={<AreaChartOutlined />} style={{ marginTop: 10 }} onClick={() => navigate('/data-health')}>
+            查看数据健康度明细
+          </Button>
         </Col>
         {statsLoading ? (
           <Col span={24}>
@@ -211,8 +219,8 @@ const P00Home: React.FC = () => {
                 <div className="stat-icon" style={{ color: '#10b981' }}>
                   <CheckCircleOutlined />
                 </div>
-                <div className="stat-value">{stats.weeklyTasks?.success || 0}</div>
-                <div className="stat-label">本周成功任务</div>
+                <div className="stat-value">{stats.weeklySuccessRate || 0}%</div>
+                <div className="stat-label">7日导入成功率</div>
               </Card>
             </Col>
             <Col xs={24} sm={12} md={6}>
@@ -220,8 +228,8 @@ const P00Home: React.FC = () => {
                 <div className="stat-icon" style={{ color: '#ef4444' }}>
                   <AlertOutlined />
                 </div>
-                <div className="stat-value">{stats.exceptionCount || 0}</div>
-                <div className="stat-label">24h 异常任务</div>
+                <div className="stat-value">{stats.activeDomains || 0}</div>
+                <div className="stat-label">启用业务域</div>
               </Card>
             </Col>
             <Col xs={24} sm={12} md={6}>
@@ -229,8 +237,8 @@ const P00Home: React.FC = () => {
                 <div className="stat-icon" style={{ color: '#f59e0b' }}>
                   <LineChartOutlined />
                 </div>
-                <div className="stat-value">{stats.maxTableRows?.toLocaleString() || '0'}</div>
-                <div className="stat-label">最大表行数</div>
+                <div className="stat-value">{stats.totalTableSizeMB?.toLocaleString() || '0'} MB</div>
+                <div className="stat-label">目标表总容量</div>
               </Card>
             </Col>
           </>

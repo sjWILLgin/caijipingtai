@@ -23,6 +23,17 @@ const statusColor: Record<string, string> = {
   REJECTED: 'red',
 };
 
+function normalizeRows(input: any): ApprovalRow[] {
+  const normalize = (arr: any[]) => arr.map((r: any) => ({
+    ...r,
+    approval_type: r?.approval_type || (String(r?.task_id || '').startsWith('TABLE_CREATE_') ? 'TABLE_CREATE' : r?.approval_type),
+  }));
+
+  if (Array.isArray(input)) return normalize(input);
+  if (Array.isArray(input?.data)) return normalize(input.data);
+  return [];
+}
+
 const P13ApprovalCenter: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [pendingRows, setPendingRows] = useState<ApprovalRow[]>([]);
@@ -36,9 +47,21 @@ const P13ApprovalCenter: React.FC = () => {
   const load = async () => {
     try {
       setLoading(true);
-      const [pending, mine] = await Promise.all([approvalApi.pending(), approvalApi.my()]);
-      setPendingRows(Array.isArray(pending) ? pending : []);
-      setMyRows(Array.isArray(mine) ? mine : []);
+      const [pendingResult, myResult] = await Promise.allSettled([approvalApi.pending(), approvalApi.my()]);
+
+      if (pendingResult.status === 'fulfilled') {
+        setPendingRows(normalizeRows(pendingResult.value));
+      } else {
+        setPendingRows([]);
+        message.warning('待办审批加载失败，已跳过');
+      }
+
+      if (myResult.status === 'fulfilled') {
+        setMyRows(normalizeRows(myResult.value));
+      } else {
+        setMyRows([]);
+        message.warning('我的申请加载失败，已跳过');
+      }
     } catch (err: any) {
       message.error(err.message || '加载审批中心失败');
     } finally {
@@ -114,10 +137,11 @@ const P13ApprovalCenter: React.FC = () => {
                     title: '类型',
                     dataIndex: 'approval_type',
                     width: 100,
-                    render: (v: string) => <Tag>{v}</Tag>,
+                    render: (v: string) => <Tag>{v === 'TABLE_CREATE' ? '建表审批' : v}</Tag>,
                   },
                   { title: '任务ID', dataIndex: 'task_id', width: 200 },
                   { title: '目标表', dataIndex: 'target_table', width: 180 },
+                  { title: '申请说明', dataIndex: 'reason', ellipsis: true, render: (v: string) => v || '-' },
                   { title: '业务域', dataIndex: 'domain', width: 120, render: (v: string) => v || '-' },
                   { title: '申请人', dataIndex: 'applicant_name', width: 120, render: (v: string) => v || '-' },
                   {
@@ -161,7 +185,7 @@ const P13ApprovalCenter: React.FC = () => {
                     title: '类型',
                     dataIndex: 'approval_type',
                     width: 100,
-                    render: (v: string) => <Tag>{v}</Tag>,
+                    render: (v: string) => <Tag>{v === 'TABLE_CREATE' ? '建表审批' : v}</Tag>,
                   },
                   { title: '任务ID', dataIndex: 'task_id', width: 200 },
                   { title: '目标表', dataIndex: 'target_table', width: 180 },

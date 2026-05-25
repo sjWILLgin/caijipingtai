@@ -3,7 +3,7 @@ import pool from '../db';
 import { successResponse, errorResponse } from '../utils';
 
 const router = Router();
-const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
+const TARGET_DB = process.env.TARGET_DB_NAME || 'data_collection_target';
 
 // GET /api/mappings/:taskId - 获取字段映射
 router.get('/:taskId', async (req: Request, res: Response) => {

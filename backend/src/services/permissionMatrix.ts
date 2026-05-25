@@ -41,12 +41,15 @@ export const PERMISSION_MATRIX: Array<{ key: PermissionKey; label: string; modul
 
 export const ANALYST_DEFAULT_PERMISSIONS: PermissionKey[] = [
   'plan.view',
+  'plan.manage',
   'task.view',
   'task.create',
+  'task.delete',
   'file.upload',
   'mapping.edit',
   'validation.run',
   'commit.execute',
+  'commit.rollback',
   'table.view',
   'dashboard.view',
   'audit.view',
@@ -54,18 +57,35 @@ export const ANALYST_DEFAULT_PERMISSIONS: PermissionKey[] = [
 
 export const DOMAIN_ADMIN_DEFAULT_PERMISSIONS: PermissionKey[] = [
   'plan.view',
+  'plan.manage',
   'task.view',
   'task.create',
+  'task.delete',
   'file.upload',
   'mapping.edit',
   'validation.run',
   'commit.execute',
+  'commit.rollback',
   'table.view',
   'table.lifecycle',
+  'table.delete',
   'dashboard.view',
   'audit.view',
   'approval.manage',
 ];
+
+export type RoleKey = 'super_admin' | 'domain_admin' | 'analyst';
+
+export function getDefaultPermissionsForRole(roleKey: RoleKey): PermissionKey[] {
+  if (roleKey === 'super_admin') return PERMISSION_MATRIX.map((p) => p.key);
+  if (roleKey === 'domain_admin') return DOMAIN_ADMIN_DEFAULT_PERMISSIONS;
+  return ANALYST_DEFAULT_PERMISSIONS;
+}
+
+export function mergeRoleDefaultPermissions(roleKey: RoleKey, permissions: PermissionKey[]): PermissionKey[] {
+  if (roleKey === 'super_admin') return getDefaultPermissionsForRole(roleKey);
+  return Array.from(new Set([...getDefaultPermissionsForRole(roleKey), ...permissions]));
+}
 
 export function isValidPermissionKey(key: string): key is PermissionKey {
   return PERMISSION_MATRIX.some((p) => p.key === key);

@@ -61,11 +61,11 @@ const P99Auth: React.FC<Props> = ({ onAuthSuccess }) => {
               children: (
                 <Form layout="vertical" onFinish={handleLogin} requiredMark={false}>
                   <Form.Item
-                    label="用户名"
+                    label="工号"
                     name="username"
-                    rules={[{ required: true, message: '请输入用户名' }]}
+                    rules={[{ required: true, message: '请输入工号' }]}
                   >
-                    <Input placeholder="请输入用户名" />
+                    <Input placeholder="请输入工号" />
                   </Form.Item>
                   <Form.Item
                     label="密码"
@@ -86,21 +86,21 @@ const P99Auth: React.FC<Props> = ({ onAuthSuccess }) => {
               children: (
                 <Form layout="vertical" onFinish={handleRegister} requiredMark={false}>
                   <Form.Item
-                    label="显示名"
+                    label="姓名"
                     name="display_name"
-                    rules={[{ required: true, message: '请输入显示名' }]}
+                    rules={[{ required: true, message: '请输入姓名' }]}
                   >
                     <Input placeholder="例如 张三" />
                   </Form.Item>
                   <Form.Item
-                    label="用户名"
+                    label="工号"
                     name="username"
                     rules={[
-                      { required: true, message: '请输入用户名' },
-                      { pattern: /^[a-zA-Z0-9_]{4,32}$/, message: '仅支持4-32位字母数字下划线' },
+                      { required: true, message: '请输入工号' },
+                      { pattern: /^[a-zA-Z0-9_]{4,32}$/, message: '工号仅支持4-32位字母数字下划线' },
                     ]}
                   >
-                    <Input placeholder="例如 zhangsan" />
+                    <Input placeholder="例如 00506395" />
                   </Form.Item>
                   <Form.Item
                     label="密码"

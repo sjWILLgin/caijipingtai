@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Card, DatePicker, Drawer, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Button, Card, DatePicker, Drawer, Form, Input, InputNumber, message, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { DeleteOutlined, FileSearchOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { approvalApi, metaApi, tablesApi } from '../services/api';
@@ -107,6 +107,10 @@ const P10ManualTables: React.FC = () => {
   const [savingApproval, setSavingApproval] = useState(false);
   const [approvalTable, setApprovalTable] = useState<ManualTableRow | null>(null);
   const [approvalForm] = Form.useForm();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletingTable, setDeletingTable] = useState<ManualTableRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
   const [flowTemplateOptions, setFlowTemplateOptions] = useState<FlowTemplateOption[]>([]);
   const [domainOptions, setDomainOptions] = useState<Array<{ value: string; label: string }>>([]);
 
@@ -276,13 +280,31 @@ const P10ManualTables: React.FC = () => {
     window.open(url, '_blank');
   };
 
-  const deleteTable = async (record: ManualTableRow) => {
+  const openDeleteModal = (record: ManualTableRow) => {
+    setDeletingTable(record);
+    setDeleteReason('');
+    setDeleteOpen(true);
+  };
+
+  const deleteTable = async () => {
+    if (!deletingTable) return;
+    if (!deleteReason.trim()) {
+      message.error('请填写删除原因');
+      return;
+    }
+
     try {
-      await tablesApi.removeTable(record.table_name);
-      message.success(`已删除数据表 ${record.table_name}`);
-      fetchRows();
+      setDeleting(true);
+      await tablesApi.removeTable(deletingTable.table_name, deleteReason.trim());
+      message.success(`已删除数据表 ${deletingTable.table_name}`);
+      setDeleteOpen(false);
+      setDeletingTable(null);
+      setDeleteReason('');
+      await fetchRows();
     } catch (e: any) {
       message.error(e.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -367,18 +389,9 @@ const P10ManualTables: React.FC = () => {
           <Button size="small" icon={<FileSearchOutlined />} onClick={() => openTrace(r)}>
             查看留痕
           </Button>
-          <Popconfirm
-            title="删除数据表"
-            description={`确认删除 ${r.table_name} 吗？删除后该表数据不可恢复。`}
-            okText="删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => deleteTable(r)}
-          >
-            <Button size="small" danger icon={<DeleteOutlined />}>
-              删除表
-            </Button>
-          </Popconfirm>
+          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => openDeleteModal(r)}>
+            删除表
+          </Button>
         </Space>
       ),
     },
@@ -407,6 +420,31 @@ const P10ManualTables: React.FC = () => {
           locale={{ emptyText: '暂无可监控的手工数据表' }}
         />
       </Card>
+
+      <Modal
+        title={deletingTable ? `删除数据表：${deletingTable.table_name}` : '删除数据表'}
+        open={deleteOpen}
+        onCancel={() => {
+          if (deleting) return;
+          setDeleteOpen(false);
+          setDeletingTable(null);
+          setDeleteReason('');
+        }}
+        onOk={deleteTable}
+        okText="确认删除"
+        okButtonProps={{ danger: true, loading: deleting }}
+      >
+        <Typography.Paragraph type="secondary">
+          删除后该表及其数据不可恢复，请填写删除原因用于审计留痕。
+        </Typography.Paragraph>
+        <Input.TextArea
+          value={deleteReason}
+          onChange={(e) => setDeleteReason(e.target.value)}
+          rows={4}
+          maxLength={300}
+          placeholder="请输入删除原因（必填）"
+        />
+      </Modal>
 
       <Modal
         title={editingTable ? `生命周期配置：${editingTable.table_name}` : '生命周期配置'}

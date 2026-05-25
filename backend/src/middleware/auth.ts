@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { errorResponse } from '../utils';
 import pool from '../db';
-import { PermissionKey } from '../services/permissionMatrix';
+import { mergeRoleDefaultPermissions, PermissionKey } from '../services/permissionMatrix';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'data_collection_platform_secret';
 
@@ -83,7 +83,7 @@ export function requirePermission(permissionKey: PermissionKey) {
     }
 
     try {
-      const permissions = await getUserPermissions(authUser.userId);
+      const permissions = mergeRoleDefaultPermissions(authUser.roleKey, await getUserPermissions(authUser.userId));
       if (!permissions.includes(permissionKey)) {
         return res.status(403).json(errorResponse(`无权限执行该操作: ${permissionKey}`));
       }

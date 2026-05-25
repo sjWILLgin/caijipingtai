@@ -4,7 +4,7 @@ import pool from '../db';
 
 const NUMERIC_TYPES = new Set(['tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint', 'decimal', 'float', 'double']);
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp']);
-const TARGET_DB = process.env.TARGET_DB_NAME || process.env.DB_NAME || 'data_collection_platform';
+const TARGET_DB = process.env.TARGET_DB_NAME || 'data_collection_target';
 
 const isEmptyValue = (v: any) => v === null || v === undefined || String(v).trim() === '';
 const IMPORT_CHUNK_SIZE = Math.max(100, Number(process.env.IMPORT_CHUNK_SIZE || 1000));

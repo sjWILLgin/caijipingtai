@@ -200,8 +200,8 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
         pagination={false}
         columns={[
           { title: 'ID', dataIndex: 'id', width: 80 },
-          { title: '显示名', dataIndex: 'display_name' },
-          { title: '用户名', dataIndex: 'username' },
+          { title: '姓名', dataIndex: 'display_name' },
+          { title: '工号', dataIndex: 'username' },
           {
             title: '当前角色',
             dataIndex: 'role_key',
@@ -282,7 +282,7 @@ const P11UserAdmin: React.FC<Props> = ({ currentUserId, onRefreshCurrentUser }) 
         width={760}
       >
         <Typography.Paragraph type="secondary">
-          仅对分析师生效。超级管理员默认拥有全部权限。
+          分析师与域管理员会自动拥有完整导入链路的基础执行权限；此处勾选用于追加扩展权限。超级管理员默认拥有全部权限。
         </Typography.Paragraph>
         {Object.keys(groupedPermissions).map((moduleName) => (
           <div key={moduleName} style={{ marginBottom: 10 }}>
