@@ -3,7 +3,13 @@ import bcrypt from 'bcryptjs';
 import { ANALYST_DEFAULT_PERMISSIONS, DOMAIN_ADMIN_DEFAULT_PERMISSIONS } from './permissionMatrix';
 import { ensureDomainTable } from './domainService';
 
-const DEFAULT_ROOT_INIT_PASSWORD = process.env.ROOT_INIT_PASSWORD || 'ChangeMe_please';
+function getRootInitPassword() {
+  const rootInitPassword = String(process.env.ROOT_INIT_PASSWORD || '').trim();
+  if (!rootInitPassword) {
+    throw new Error('缺少必要环境变量 ROOT_INIT_PASSWORD');
+  }
+  return rootInitPassword;
+}
 
 export async function initAuthTables() {
   await ensureDomainTable();
@@ -87,7 +93,7 @@ export async function initAuthTables() {
       ('analyst', '分析师')`
   );
 
-  const rootPasswordHash = await bcrypt.hash(DEFAULT_ROOT_INIT_PASSWORD, 10);
+  const rootPasswordHash = await bcrypt.hash(getRootInitPassword(), 10);
   await pool.query(
     `INSERT INTO sys_user (username, password_hash, display_name, is_active)
      VALUES ('root', ?, '系统超管', 1)

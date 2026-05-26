@@ -4,7 +4,13 @@ import { errorResponse } from '../utils';
 import pool from '../db';
 import { mergeRoleDefaultPermissions, PermissionKey } from '../services/permissionMatrix';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'data_collection_platform_secret';
+function getJwtSecret() {
+  const jwtSecret = String(process.env.JWT_SECRET || '').trim();
+  if (!jwtSecret) {
+    throw new Error('缺少必要环境变量 JWT_SECRET');
+  }
+  return jwtSecret;
+}
 
 export type AuthUser = {
   userId: number;
@@ -19,7 +25,7 @@ export async function getUserPermissions(userId: number): Promise<PermissionKey[
 
 export function signAuthToken(user: AuthUser) {
   const expiresIn = (process.env.JWT_EXPIRES_IN || '12h') as jwt.SignOptions['expiresIn'];
-  return jwt.sign(user, JWT_SECRET, { expiresIn });
+  return jwt.sign(user, getJwtSecret(), { expiresIn });
 }
 
 export function authRequired(req: Request, res: Response, next: NextFunction) {
@@ -33,7 +39,7 @@ export function authRequired(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as AuthUser;
+    const decoded = jwt.verify(token, getJwtSecret()) as AuthUser;
     (req as any).authUser = decoded;
     return next();
   } catch (err) {
